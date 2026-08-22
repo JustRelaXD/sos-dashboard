@@ -70,6 +70,28 @@ CREATE INDEX IF NOT EXISTS idx_safety_drones_city ON safety_command.drones(city_
 CREATE INDEX IF NOT EXISTS idx_safety_patrol_points_city ON safety_command.patrol_points(city_id, sequence);
 CREATE INDEX IF NOT EXISTS idx_safety_danger_zones_city ON safety_command.danger_zones(city_id);
 CREATE INDEX IF NOT EXISTS idx_safety_sos_log_city ON safety_command.sos_log(city_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_safety_incident_reports_city ON safety_command.incident_reports(city_id, occurred_at DESC);
+
+CREATE TABLE IF NOT EXISTS safety_command.incident_reports (
+  id text PRIMARY KEY,
+  city_id text NOT NULL DEFAULT 'patiala',
+  title text NOT NULL,
+  category text NOT NULL DEFAULT 'Other',
+  severity text NOT NULL DEFAULT 'Medium',
+  status text NOT NULL DEFAULT 'Open',
+  longitude numeric(10,7) NOT NULL,
+  latitude numeric(10,7) NOT NULL,
+  street text,
+  landmark text,
+  reporter_id text,
+  responder_notes text,
+  media_type text,
+  media_url text,
+  media_poster text,
+  occurred_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS safety_command.sos_log (
   id text PRIMARY KEY,

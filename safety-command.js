@@ -109,6 +109,27 @@ const schemaSql = `
   CREATE INDEX IF NOT EXISTS idx_safety_patrol_points_city ON safety_command.patrol_points(city_id, sequence);
   CREATE INDEX IF NOT EXISTS idx_safety_danger_zones_city ON safety_command.danger_zones(city_id);
   CREATE INDEX IF NOT EXISTS idx_safety_sos_log_city ON safety_command.sos_log(city_id, started_at DESC);
+  CREATE TABLE IF NOT EXISTS safety_command.incident_reports (
+    id text PRIMARY KEY,
+    city_id text NOT NULL DEFAULT 'patiala',
+    title text NOT NULL,
+    category text NOT NULL DEFAULT 'Other',
+    severity text NOT NULL DEFAULT 'Medium',
+    status text NOT NULL DEFAULT 'Open',
+    longitude numeric(10,7) NOT NULL,
+    latitude numeric(10,7) NOT NULL,
+    street text,
+    landmark text,
+    reporter_id text,
+    responder_notes text,
+    media_type text,
+    media_url text,
+    media_poster text,
+    occurred_at timestamptz NOT NULL DEFAULT now(),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+  );
+  CREATE INDEX IF NOT EXISTS idx_safety_incident_reports_city ON safety_command.incident_reports(city_id, occurred_at DESC);
   ALTER TABLE safety_command.stations ADD COLUMN IF NOT EXISTS reserve_drone_id text;
   ALTER TABLE safety_command.drones ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'Patrol';
   ALTER TABLE safety_command.drones ADD COLUMN IF NOT EXISTS coverage_for_drone_id text;
@@ -280,6 +301,86 @@ async function ensureSparePool(client, cityId = 'patiala') {
 async function seedIfEmpty(client) {
   const result = await client.query('SELECT 1 FROM safety_command.city_profiles LIMIT 1');
   if (!result.rowCount) await saveConfig(client, DEFAULT_CONFIG);
+}
+
+/** Demo incident reports seeded into Neon so the incident log panel is never
+ *  empty.  Matches the demo data the panel used to ship with; media paths are
+ *  local (public/media/incidents/...) and fall back to placeholders when the
+ *  files are absent (e.g. on Vercel). */
+const DEMO_INCIDENTS = [
+  {
+    id: 'INC-2408', title: 'Street harassment reported', category: 'Harassment', severity: 'Critical', status: 'Dispatched',
+    longitude: -122.4098, latitude: 37.8087, street: 'North Beach / Pier 39', landmark: "Near Fisherman's Wharf",
+    reporterId: 'USR-A4F2K', responderNotes: 'Unit S-14 dispatched. Caller guided to well-lit cafe pending arrival.',
+    mediaType: 'screenshot', mediaUrl: '/media/incidents/INC-2408/snapshot-001.jpg', mediaPoster: null,
+    occurredAt: '2026-08-22T10:42:00Z'
+  },
+  {
+    id: 'INC-2407', title: 'Followed home from transit station', category: 'Stalking', severity: 'High', status: 'Open',
+    longitude: -122.4074, latitude: 37.7879, street: 'Union Square / Stockton St', landmark: 'Powell Station exit',
+    reporterId: 'USR-B8C3D', responderNotes: 'Helpline volunteer on call, guiding user to nearest safe zone.',
+    mediaType: null, mediaUrl: null, mediaPoster: null,
+    occurredAt: '2026-08-22T10:28:00Z'
+  },
+  {
+    id: 'INC-2406', title: 'Assault near park entrance', category: 'Assault', severity: 'Critical', status: 'Dispatched',
+    longitude: -122.4177, latitude: 37.7796, street: 'Civic Center / Grove St', landmark: 'Civic Center Plaza',
+    reporterId: 'USR-C2E9F', responderNotes: 'EMS + patrol dispatched. Scene secured, victim receiving aid.',
+    mediaType: 'recording', mediaUrl: '/media/incidents/INC-2406/recording-001.mp4', mediaPoster: '/media/incidents/INC-2406/poster.jpg',
+    occurredAt: '2026-08-22T09:56:00Z'
+  },
+  {
+    id: 'INC-2405', title: 'Poor lighting on walking route', category: 'Poor Lighting', severity: 'Medium', status: 'Resolved',
+    longitude: -122.3937, latitude: 37.7955, street: 'Embarcadero / Ferry Building', landmark: 'Ferry Plaza',
+    reporterId: 'USR-D7A1B', responderNotes: 'City maintenance notified, streetlight repaired within 2 hrs.',
+    mediaType: 'screenshot', mediaUrl: '/media/incidents/INC-2405/snapshot-001.jpg', mediaPoster: null,
+    occurredAt: '2026-08-22T09:41:00Z'
+  },
+  {
+    id: 'INC-2404', title: 'Unsafe taxi — driver taking detour', category: 'Unsafe Transport', severity: 'High', status: 'Open',
+    longitude: -122.4197, latitude: 37.7651, street: 'Mission District / 16th St', landmark: '16th & Mission BART',
+    reporterId: 'USR-E5F4C', responderNotes: 'Live tracking shared with helpline. Driver rerouting confirmed via GPS.',
+    mediaType: null, mediaUrl: null, mediaPoster: null,
+    occurredAt: '2026-08-22T09:18:00Z'
+  },
+  {
+    id: 'INC-2403', title: 'Stalking pattern over 3 days', category: 'Stalking', severity: 'Low', status: 'Open',
+    longitude: -122.3878, latitude: 37.7582, street: 'Dogpatch / 3rd Street', landmark: 'Minnesota St',
+    reporterId: 'USR-F9D2A', responderNotes: 'Pattern report logged, flagged for patrol attention in corridor.',
+    mediaType: 'recording', mediaUrl: '/media/incidents/INC-2403/recording-001.mp4', mediaPoster: '/media/incidents/INC-2403/poster.jpg',
+    occurredAt: '2026-08-22T08:56:00Z'
+  }
+];
+
+async function seedIncidentsIfEmpty(client) {
+  const result = await client.query('SELECT 1 FROM safety_command.incident_reports LIMIT 1');
+  if (result.rowCount) return;
+  for (const incident of DEMO_INCIDENTS) {
+    await client.query(`
+      INSERT INTO safety_command.incident_reports (
+        id, city_id, title, category, severity, status, longitude, latitude, street, landmark,
+        reporter_id, responder_notes, media_type, media_url, media_poster, occurred_at
+      )
+      VALUES ($1, 'patiala', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      ON CONFLICT (id) DO NOTHING
+    `, [
+      incident.id,
+      incident.title,
+      incident.category,
+      incident.severity,
+      incident.status,
+      incident.longitude,
+      incident.latitude,
+      incident.street,
+      incident.landmark,
+      incident.reporterId,
+      incident.responderNotes,
+      incident.mediaType,
+      incident.mediaUrl,
+      incident.mediaPoster,
+      incident.occurredAt
+    ]);
+  }
 }
 
 async function saveConfig(client, rawConfig) {
@@ -468,6 +569,116 @@ export function registerSafetyRoutes(app, getPool) {
         body.resolvedAt ? new Date(body.resolvedAt) : null,
         body.warning ? String(body.warning).slice(0, 500) : null,
         Number.isFinite(Number(body.routeKm)) ? Number(body.routeKm) : null
+      ]);
+      res.json({ ok: true, id });
+    } catch (error) { next(error); }
+    finally { client.release(); }
+  });
+
+  // Rich incident reports backing the right-side incident log panel.  One row
+  // per incident, idempotently upserted by id - simulated SOS calls write here
+  // with the same id they use for sos_log, so the panel and the call log stay
+  // in sync as a call moves through its lifecycle.
+  app.get('/api/safety/incidents', async (req, res, next) => {
+    const client = await getPool().connect();
+    try {
+      await ensureSchema(client);
+      await seedIncidentsIfEmpty(client);
+      const cityId = String(req.query.cityId || 'patiala');
+      const requestedLimit = Number(req.query.limit);
+      const limit = Number.isFinite(requestedLimit) ? Math.min(500, Math.max(1, Math.round(requestedLimit))) : 50;
+      const { rows } = await client.query(`
+        SELECT id, city_id, title, category, severity, status, longitude, latitude, street, landmark,
+               reporter_id, responder_notes, media_type, media_url, media_poster, occurred_at, updated_at
+        FROM safety_command.incident_reports
+        WHERE city_id = $1
+        ORDER BY occurred_at DESC, id DESC
+        LIMIT $2
+      `, [cityId, limit]);
+      res.json({
+        entries: rows.map((row) => ({
+          id: row.id,
+          title: row.title,
+          category: row.category,
+          severity: row.severity,
+          status: row.status,
+          coordinate: [Number(row.longitude), Number(row.latitude)],
+          street: row.street,
+          landmark: row.landmark,
+          reporterId: row.reporter_id,
+          responderNotes: row.responder_notes,
+          media: row.media_type
+            ? { type: row.media_type, src: row.media_url, poster: row.media_poster || undefined }
+            : null,
+          occurredAt: row.occurred_at,
+          updatedAt: row.updated_at
+        }))
+      });
+    } catch (error) { next(error); }
+    finally { client.release(); }
+  });
+
+  app.post('/api/safety/incidents', async (req, res, next) => {
+    const client = await getPool().connect();
+    try {
+      await ensureSchema(client);
+      const body = req.body || {};
+      const id = String(body.id || '').trim();
+      if (!id) {
+        res.status(400).json({ detail: 'id is required' });
+        return;
+      }
+      const coordinate = Array.isArray(body.coordinate) && body.coordinate.length === 2
+        ? [Number(body.coordinate[0]), Number(body.coordinate[1])]
+        : null;
+      if (!coordinate || !Number.isFinite(coordinate[0]) || !Number.isFinite(coordinate[1])) {
+        res.status(400).json({ detail: 'coordinate [lng, lat] is required' });
+        return;
+      }
+      const allowedSeverity = new Set(['Low', 'Medium', 'High', 'Critical']);
+      const allowedStatus = new Set(['Open', 'Dispatched', 'Resolved']);
+      const media = body.media && typeof body.media === 'object' ? body.media : null;
+      const mediaType = media && (media.type === 'screenshot' || media.type === 'recording') ? media.type : null;
+      await client.query(`
+        INSERT INTO safety_command.incident_reports (
+          id, city_id, title, category, severity, status, longitude, latitude, street, landmark,
+          reporter_id, responder_notes, media_type, media_url, media_poster, occurred_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        ON CONFLICT (id) DO UPDATE SET
+          city_id = EXCLUDED.city_id,
+          title = COALESCE(EXCLUDED.title, safety_command.incident_reports.title),
+          category = COALESCE(EXCLUDED.category, safety_command.incident_reports.category),
+          severity = COALESCE(EXCLUDED.severity, safety_command.incident_reports.severity),
+          status = EXCLUDED.status,
+          longitude = EXCLUDED.longitude,
+          latitude = EXCLUDED.latitude,
+          street = COALESCE(EXCLUDED.street, safety_command.incident_reports.street),
+          landmark = COALESCE(EXCLUDED.landmark, safety_command.incident_reports.landmark),
+          reporter_id = COALESCE(EXCLUDED.reporter_id, safety_command.incident_reports.reporter_id),
+          responder_notes = COALESCE(EXCLUDED.responder_notes, safety_command.incident_reports.responder_notes),
+          media_type = COALESCE(EXCLUDED.media_type, safety_command.incident_reports.media_type),
+          media_url = COALESCE(EXCLUDED.media_url, safety_command.incident_reports.media_url),
+          media_poster = COALESCE(EXCLUDED.media_poster, safety_command.incident_reports.media_poster),
+          occurred_at = COALESCE(EXCLUDED.occurred_at, safety_command.incident_reports.occurred_at),
+          updated_at = now()
+      `, [
+        id,
+        String(body.cityId || 'patiala'),
+        String(body.title || id).trim().slice(0, 200),
+        String(body.category || 'Other').trim().slice(0, 80),
+        allowedSeverity.has(String(body.severity)) ? String(body.severity) : 'Medium',
+        allowedStatus.has(String(body.status)) ? String(body.status) : 'Open',
+        coordinate[0],
+        coordinate[1],
+        body.street ? String(body.street).trim().slice(0, 200) : null,
+        body.landmark ? String(body.landmark).trim().slice(0, 200) : null,
+        body.reporterId ? String(body.reporterId).trim().slice(0, 150) : null,
+        body.responderNotes ? String(body.responderNotes).slice(0, 500) : null,
+        mediaType,
+        media && media.src ? String(media.src).slice(0, 500) : null,
+        media && media.poster ? String(media.poster).slice(0, 500) : null,
+        body.occurredAt ? new Date(body.occurredAt) : new Date()
       ]);
       res.json({ ok: true, id });
     } catch (error) { next(error); }

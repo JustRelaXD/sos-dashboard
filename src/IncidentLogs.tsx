@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Search, ArrowRight, MapPin, Shield, Camera, Video } from 'lucide-react';
 
 /** Media stays local during demos and can later point at a remote storage adapter. */
@@ -29,7 +29,24 @@ type Incident = {
   media?: MediaAsset;
 };
 
-const incidents: Incident[] = [
+/** API shape returned by GET /api/safety/incidents */
+type ApiIncident = {
+  id: string;
+  title: string;
+  category: string;
+  severity: string;
+  status: string;
+  coordinate: [number, number];
+  street: string | null;
+  landmark: string | null;
+  reporterId: string | null;
+  responderNotes: string | null;
+  media: { type: 'screenshot' | 'recording'; src: string; poster?: string } | null;
+  occurredAt: string;
+  updatedAt: string;
+};
+
+const DEMO_INCIDENTS: Incident[] = [
   {
     id: 'INC-2408',
     title: 'Street harassment reported',
@@ -172,13 +189,77 @@ function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number)
 const severityClass = (severity: string) => severity.toLowerCase();
 const statusClass = (status: string) => status.toLowerCase();
 
+/** Format an ISO timestamp into the panel's display strings. */
+function formatTimestamp(iso: string) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return { timestamp: iso, date: iso.slice(0, 10), time: iso.slice(11, 16) };
+  return {
+    timestamp: date.toISOString(),
+    date: date.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
+    time: date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  };
+}
+
+/** Map an API incident row onto the panel's Incident model. */
+function apiToIncident(entry: ApiIncident): Incident {
+  const when = formatTimestamp(entry.occurredAt);
+  const category = (['Harassment', 'Stalking', 'Poor Lighting', 'Assault', 'Unsafe Transport', 'Other'] as const)
+    .find((c) => c === entry.category) ?? 'Other';
+  const severity = (['Low', 'Medium', 'High', 'Critical'] as const)
+    .find((s) => s === entry.severity) ?? 'Medium';
+  const status = (['Open', 'Dispatched', 'Resolved'] as const)
+    .find((s) => s === entry.status) ?? 'Open';
+  return {
+    id: entry.id,
+    title: entry.title,
+    category,
+    severity,
+    status,
+    timestamp: when.timestamp,
+    date: when.date,
+    time: when.time,
+    location: {
+      street: entry.street || 'Unknown street',
+      landmark: entry.landmark || 'Unknown area',
+      lat: entry.coordinate[1],
+      lng: entry.coordinate[0]
+    },
+    reporterId: entry.reporterId || '—',
+    responderNotes: entry.responderNotes || '',
+    media: entry.media ? { type: entry.media.type, src: entry.media.src, poster: entry.media.poster } : undefined
+  };
+}
+
 export function IncidentLogs() {
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedId, setSelectedId] = useState<string | null>(incidents[0].id);
+  const [incidents, setIncidents] = useState<Incident[]>(DEMO_INCIDENTS);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeCategories, setActiveCategories] = useState<Set<string>>(new Set());
   const [activeSeverities, setActiveSeverities] = useState<Set<string>>(new Set());
   const [hoveredMedia, setHoveredMedia] = useState<string | null>(null);
   const [failedMedia, setFailedMedia] = useState<Set<string>>(new Set());
+
+  /** Load incident reports from Neon (GET /api/safety/incidents), falling back
+   *  to the embedded demo list when the API is unavailable (e.g. on Vercel).
+   *  Refetches whenever a simulated SOS call POSTs a new report. */
+  const refreshIncidents = React.useCallback(() => {
+    fetch('/api/safety/incidents?limit=50')
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('incidents unavailable')))
+      .then((data: { entries: ApiIncident[] }) => {
+        if (Array.isArray(data.entries) && data.entries.length) {
+          setIncidents(data.entries.map(apiToIncident));
+          setSelectedId((current) => (current && data.entries.some((e) => e.id === current)) ? current : data.entries[0].id);
+        }
+      })
+      .catch(() => { /* keep demo data when the API is down */ });
+  }, []);
+
+  useEffect(() => {
+    refreshIncidents();
+    const onUpdate = () => refreshIncidents();
+    window.addEventListener('sos-incident-updated', onUpdate);
+    return () => window.removeEventListener('sos-incident-updated', onUpdate);
+  }, [refreshIncidents]);
 
   const markMediaFailed = (incidentId: string) => {
     setFailedMedia((current) => new Set(current).add(incidentId));

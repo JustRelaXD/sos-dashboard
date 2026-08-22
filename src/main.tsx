@@ -1554,6 +1554,65 @@ function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cityId: safetyConfigRef.current.city.id, ...entry })
     }).catch(() => { /* persistence is best-effort */ });
+    // Mirror every simulated call into the incident-reports table so the
+    // right-side incident log panel is backed by the same Neon data.  Status
+    // stages (Received -> Dispatched -> Monitoring -> Resolved) upsert the
+    // same id, so the incident row follows the call's lifecycle.
+    const severity = entry.priority === 'Critical' || entry.priority === 'High' || entry.priority === 'Medium' || entry.priority === 'Low'
+      ? entry.priority
+      : 'Medium';
+    const status = entry.status === 'Resolved' ? 'Resolved' : entry.status === 'Received' ? 'Open' : 'Dispatched';
+    const context = deriveIncidentContext(entry.coordinate);
+    fetch('/api/safety/incidents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: entry.id,
+        cityId: safetyConfigRef.current.city.id,
+        title: entry.callerLabel,
+        category: 'Other',
+        severity,
+        status,
+        coordinate: entry.coordinate,
+        street: context.street,
+        landmark: context.landmark,
+        reporterId: entry.callerLabel,
+        responderNotes: entry.warning
+          ? entry.warning
+          : status === 'Dispatched'
+            ? 'Drone dispatched; live tracking active.'
+            : status === 'Resolved'
+              ? 'Response complete; drone returning to patrol.'
+              : 'SOS received; authorities alerted.',
+        media: null,
+        occurredAt: entry.startedAt || new Date().toISOString()
+      })
+    })
+      .then((response) => {
+        if (response.ok) window.dispatchEvent(new CustomEvent('sos-incident-updated'));
+      })
+      .catch(() => { /* persistence is best-effort */ });
+  }
+
+  /** Derive a human-readable street/landmark for the incident log from the
+   *  nearest configured patrol point and danger zone. */
+  function deriveIncidentContext(coordinate: Coordinate) {
+    const zones = safetyConfigRef.current.dangerZones || [];
+    const points = safetyConfigRef.current.patrolPoints || [];
+    let nearestZone: { name: string; distance: number } | null = null;
+    let nearestPoint: { name: string; distance: number } | null = null;
+    zones.forEach((zone) => {
+      const distance = turf.distance(turf.point(coordinate), turf.point(zone.coordinate), { units: 'kilometers' });
+      if (!nearestZone || distance < nearestZone.distance) nearestZone = { name: zone.name, distance };
+    });
+    points.forEach((point) => {
+      const distance = turf.distance(turf.point(coordinate), turf.point(point.coordinate), { units: 'kilometers' });
+      if (!nearestPoint || distance < nearestPoint.distance) nearestPoint = { name: point.name, distance };
+    });
+    return {
+      street: nearestPoint ? `${nearestPoint.name} area` : 'Patiala',
+      landmark: nearestZone ? nearestZone.name : 'City center'
+    };
   }
 
   /** True while at least one SOS response is in flight (drives the guards that
