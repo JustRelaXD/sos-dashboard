@@ -108,6 +108,58 @@ const statusClass = (status: string) => status.toLowerCase();
 const CATEGORIES: Incident['category'][] = ['Harassment', 'Stalking', 'Poor Lighting', 'Assault', 'Unsafe Transport', 'Other'];
 const SEVERITIES: Incident['severity'][] = ['Critical', 'High', 'Medium', 'Low'];
 
+/** Geofenced high-risk zones — clusters of incidents auto-flagged by density */
+type GeofenceZone = {
+  id: string;
+  name: string;
+  center: { lat: number; lng: number };
+  radiusM: number;
+  incidentIds: string[];
+  riskLevel: 'High Risk' | 'Moderate' | 'Watch';
+};
+
+/** Auto-derive geofenced zones: group incidents by proximity (within 500m) */
+function deriveGeofenceZones(incidents: Incident[]): GeofenceZone[] {
+  const RADIUS_M = 500;
+  const zones: GeofenceZone[] = [];
+  const assigned = new Set<string>();
+
+  incidents.forEach((incident) => {
+    if (assigned.has(incident.id)) return;
+    const nearby = incidents.filter((other) => {
+      if (assigned.has(other.id)) return false;
+      const dist = haversineMeters(incident.location.lat, incident.location.lng, other.location.lat, other.location.lng);
+      return dist <= RADIUS_M;
+    });
+    nearby.forEach((n) => assigned.add(n.id));
+    if (nearby.length < 1) return;
+
+    const avgLat = nearby.reduce((s, i) => s + i.location.lat, 0) / nearby.length;
+    const avgLng = nearby.reduce((s, i) => s + i.location.lng, 0) / nearby.length;
+    const criticalCount = nearby.filter((i) => i.severity === 'Critical' || i.severity === 'High').length;
+    const riskLevel: GeofenceZone['riskLevel'] = criticalCount >= 2 ? 'High Risk' : criticalCount >= 1 ? 'Moderate' : 'Watch';
+
+    zones.push({
+      id: `ZONE-${String(zones.length + 1).padStart(2, '0')}`,
+      name: incident.location.street.split(' / ')[0],
+      center: { lat: avgLat, lng: avgLng },
+      radiusM: RADIUS_M,
+      incidentIds: nearby.map((n) => n.id),
+      riskLevel,
+    });
+  });
+
+  return zones;
+}
+
+function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 export function IncidentLogs() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(incidents[0].id);
@@ -135,6 +187,9 @@ export function IncidentLogs() {
     setActiveSeverities(new Set());
     setSearchTerm('');
   };
+
+  const geofenceZones = useMemo(() => deriveGeofenceZones(filtered), [filtered]);
+  const highRiskZones = geofenceZones.filter((z) => z.riskLevel === 'High Risk').length;
 
   const hasFilters = activeCategories.size > 0 || activeSeverities.size > 0 || searchTerm.length > 0;
 
@@ -280,6 +335,27 @@ export function IncidentLogs() {
           <div className="il-no-results">No incidents match your current filters.</div>
         )}
       </div>
+
+      {geofenceZones.length > 0 && (
+        <div className="il-geofence-section">
+          <div className="il-geofence-header">
+            <span className="il-filter-group-label">Geofenced risk zones</span>
+            <span className={`il-geofence-count ${highRiskZones > 0 ? 'danger' : ''}`}>{geofenceZones.length} zones · {highRiskZones} high risk</span>
+          </div>
+          <div className="il-geofence-list">
+            {geofenceZones.map((zone) => (
+              <div key={zone.id} className={`il-geofence-row risk-${zone.riskLevel.toLowerCase().replace(' ', '-')}`}>
+                <span className={`il-geofence-dot risk-${zone.riskLevel.toLowerCase().replace(' ', '-')}`} />
+                <span className="il-geofence-name">{zone.name}</span>
+                <span className="il-geofence-detail">
+                  {zone.incidentIds.length} incidents · {zone.radiusM}m radius · {zone.center.lat.toFixed(4)}, {zone.center.lng.toFixed(4)}
+                </span>
+                <span className={`il-geofence-badge risk-${zone.riskLevel.toLowerCase().replace(' ', '-')}`}>{zone.riskLevel}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="il-footer">
         <span>

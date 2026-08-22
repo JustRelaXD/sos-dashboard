@@ -604,6 +604,120 @@
   box-shadow: 0 0 8px rgba(5, 150, 105, 0.55);
 }
 
+/* Geofenced risk zones */
+.il-geofence-section {
+  display: grid;
+  gap: 8px;
+  margin: 0 28px 14px;
+  padding: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 10px;
+  background: rgba(241, 245, 249, 0.5);
+}
+
+.il-geofence-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.il-geofence-count {
+  font-size: 9px;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.il-geofence-count.danger {
+  color: var(--danger);
+}
+
+.il-geofence-list {
+  display: grid;
+  gap: 6px;
+}
+
+.il-geofence-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.il-geofence-row.risk-high-risk {
+  border-color: rgba(225, 29, 72, 0.25);
+  background: rgba(255, 241, 242, 0.6);
+}
+
+.il-geofence-row.risk-moderate {
+  border-color: rgba(245, 158, 11, 0.2);
+}
+
+.il-geofence-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+
+.il-geofence-dot.risk-high-risk {
+  background: var(--danger);
+  box-shadow: 0 0 8px rgba(225, 29, 72, 0.4);
+}
+
+.il-geofence-dot.risk-moderate {
+  background: #f59e0b;
+}
+
+.il-geofence-dot.risk-watch {
+  background: var(--cyan);
+}
+
+.il-geofence-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: #1e293b;
+  white-space: nowrap;
+}
+
+.il-geofence-detail {
+  flex: 1;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 9px;
+  font-family: ui-monospace, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.il-geofence-badge {
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 8px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.il-geofence-badge.risk-high-risk {
+  background: rgba(225, 29, 72, 0.12);
+  color: var(--danger);
+}
+
+.il-geofence-badge.risk-moderate {
+  background: rgba(245, 158, 11, 0.12);
+  color: #d97706;
+}
+
+.il-geofence-badge.risk-watch {
+  background: rgba(8, 145, 178, 0.1);
+  color: var(--cyan);
+}
+
 /* Responsive */
 @media (max-width: 820px) {
   .incident-logs-panel {
