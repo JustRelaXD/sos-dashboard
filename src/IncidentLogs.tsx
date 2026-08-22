@@ -318,7 +318,7 @@ export function IncidentLogs() {
             <div
               key={incident.id}
               className="il-log-card-wrapper"
-              onMouseEnter={() => incident.media && setHoveredMedia(incident.id)}
+              onMouseEnter={() => setHoveredMedia(incident.id)}
               onMouseLeave={() => setHoveredMedia(null)}
             >
               <button
@@ -362,53 +362,69 @@ export function IncidentLogs() {
                 </button>
               )}
 
-              {incident.media && hoveredMedia === incident.id && (
-                <div className="il-media-popover">
-                  <div className="il-media-preview">
-                    <span className="il-media-badge">
-                      {incident.media.type === 'screenshot' ? 'LOCAL SNAPSHOT' : 'LOCAL REC 00:38 / 02:14'}
-                    </span>
-                    <div className="il-media-placeholder">
-                      {!failedMedia.has(incident.id) && incident.media.type === 'screenshot' && (
-                        <img
-                          className="il-local-media"
-                          src={incident.media.src}
-                          alt={`Incident ${incident.id} local screenshot`}
-                          loading="lazy"
-                          onError={() => markMediaFailed(incident.id)}
-                        />
-                      )}
-                      {!failedMedia.has(incident.id) && incident.media.type === 'recording' && (
-                        <video
-                          className="il-local-media"
-                          src={incident.media.src}
-                          poster={incident.media.poster}
-                          muted
-                          autoPlay
-                          loop
-                          playsInline
-                          preload="metadata"
-                          onError={() => markMediaFailed(incident.id)}
-                        />
-                      )}
-                      {(!incident.media || failedMedia.has(incident.id)) && (
-                        incident.media?.type === 'screenshot' ? (
-                          <div className="il-placeholder-screenshot">
-                            <span className="il-placeholder-label">CAM 04 / {incident.location.landmark.toUpperCase()}</span>
-                            <span className="il-placeholder-id">LOCAL FILE UNAVAILABLE</span>
-                          </div>
-                        ) : (
-                          <div className="il-placeholder-recording">
-                            <span className="il-placeholder-play">▶</span>
-                            <span className="il-placeholder-label">LOCAL FILE UNAVAILABLE</span>
-                          </div>
-                        )
-                      )}
+              {hoveredMedia === incident.id && (
+                <div className={`il-media-popover${incident.media ? '' : ' text-only'}`}>
+                  {incident.media && (
+                    <div className="il-media-visual">
+                      <span className="il-media-badge">
+                        {incident.media.type === 'screenshot' ? 'LOCAL SNAPSHOT' : 'LOCAL REC 00:38 / 02:14'}
+                      </span>
+                      <div className="il-media-placeholder">
+                        {!failedMedia.has(incident.id) && incident.media.type === 'screenshot' && (
+                          <img
+                            className="il-local-media"
+                            src={incident.media.src}
+                            alt={`Incident ${incident.id} local screenshot`}
+                            loading="lazy"
+                            onError={() => markMediaFailed(incident.id)}
+                          />
+                        )}
+                        {!failedMedia.has(incident.id) && incident.media.type === 'recording' && (
+                          <video
+                            className="il-local-media"
+                            src={incident.media.src}
+                            poster={incident.media.poster}
+                            muted
+                            autoPlay
+                            loop
+                            playsInline
+                            preload="metadata"
+                            onError={() => markMediaFailed(incident.id)}
+                          />
+                        )}
+                        {failedMedia.has(incident.id) && (
+                          incident.media.type === 'screenshot' ? (
+                            <div className="il-placeholder-screenshot">
+                              <span className="il-placeholder-label">CAM 04 / {incident.location.landmark.toUpperCase()}</span>
+                              <span className="il-placeholder-id">LOCAL FILE UNAVAILABLE</span>
+                            </div>
+                          ) : (
+                            <div className="il-placeholder-recording">
+                              <span className="il-placeholder-play">▶</span>
+                              <span className="il-placeholder-label">LOCAL FILE UNAVAILABLE</span>
+                            </div>
+                          )
+                        )}
+                      </div>
+                      <div className="il-media-footer">
+                        <span>{incident.location.street}</span>
+                        <span>{incident.time}</span>
+                      </div>
                     </div>
-                    <div className="il-media-footer">
-                      <span>{incident.location.street}</span>
-                      <span>{incident.time}</span>
+                  )}
+                  <div className="il-media-details">
+                    <div className="il-media-detail-heading">
+                      <span className="il-filter-group-label">Incident detail</span>
+                      <strong>{incident.id}</strong>
                     </div>
+                    <h3>{incident.title}</h3>
+                    <div className="il-media-detail-row"><span>Status</span><b>{incident.status}</b></div>
+                    <div className="il-media-detail-row"><span>Severity</span><b className={`severity-text ${severityClass(incident.severity)}`}>{incident.severity}</b></div>
+                    <div className="il-media-detail-row"><span>Category</span><b>{incident.category}</b></div>
+                    <div className="il-media-detail-row"><span>Location</span><b>{incident.location.landmark}</b></div>
+                    <div className="il-media-detail-row"><span>Reporter</span><b>{incident.reporterId}</b></div>
+                    <div className="il-media-detail-row"><span>Reported</span><b>{incident.date} · {incident.time}</b></div>
+                    <p className="il-media-notes"><Shield size={11} /> {incident.responderNotes}</p>
                   </div>
                 </div>
               )}
