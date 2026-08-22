@@ -155,7 +155,7 @@ type SafetyConfig = {
   stations: Array<{ id: string; name: string; coordinate: Coordinate; droneId?: string | null; reserveDroneId?: string | null }>;
   drones: Drone[];
   patrolPoints: Array<{ id: string; name: string; coordinate: Coordinate; sequence: number }>;
-  dangerZones: Array<{ id: string; name: string; category: string; severity: number; coordinate: Coordinate; radiusM: number }>;
+  dangerZones: Array<{ id: string; name: string; category: string; severity: number; coordinate: Coordinate; radiusM: number; ring?: Coordinate[] | null }>;
   planner: { gridResolutionM: number | null };
 };
 
@@ -172,7 +172,8 @@ const sources = {
   hotspots: 'hotspots',
   safePoints: 'safePoints',
   riskHeatmap: 'riskHeatmap',
-  noFlyZones: 'noFlyZones'
+  noFlyZones: 'noFlyZones',
+  zoneRings: 'zoneRings'
 };
 
 const lightOsmStyle: maplibregl.StyleSpecification = {
@@ -696,6 +697,18 @@ function App() {
     [safetyConfig.dangerZones]
   );
 
+  // Danger zones drawn as polygon areas (rings from the studio builder) get a
+  // fill + boundary on the map.  Zones without a ring keep the circle/heatmap
+  // rendering, so old point+radius grids are untouched.
+  const zoneRingCollection = useMemo(
+    () => featureCollection(
+      safetyConfig.dangerZones
+        .filter((zone) => zone.ring && zone.ring.length >= 3)
+        .map((zone) => turf.polygon([zone.ring as Coordinate[]], { id: zone.id, name: zone.name, severity: zone.severity }))
+    ),
+    [safetyConfig.dangerZones]
+  );
+
   const riskHeatmapCollection = useMemo(() => {
     const points = heatPoints.map((point) => turf.point([point[1], point[0]], { intensity: point[2] * 0.4 }));
     const configuredZones = safetyConfig.dangerZones.map((zone) => turf.point(zone.coordinate, { intensity: zone.severity * 2 }));
@@ -724,6 +737,7 @@ function App() {
       setSource(map, sources.droneStations, droneStationCollection);
       setSource(map, sources.hotspots, hotspotCollection);
       setSource(map, sources.riskHeatmap, riskHeatmapCollection);
+      setSource(map, sources.zoneRings, zoneRingCollection);
       renderDroneMarkers(map, safetyConfig.drones);
       bindMap(map);
       fitCollections(map, [patrolRouteCollection, hotspotCollection, droneStationCollection]);
@@ -775,7 +789,8 @@ function App() {
     setSource(map, sources.droneStations, droneStationCollection);
     setSource(map, sources.hotspots, hotspotCollection);
     setSource(map, sources.riskHeatmap, riskHeatmapCollection);
-  }, [mapReady, patrolRouteCollection, droneStationCollection, hotspotCollection, riskHeatmapCollection]);
+    setSource(map, sources.zoneRings, zoneRingCollection);
+  }, [mapReady, patrolRouteCollection, droneStationCollection, hotspotCollection, riskHeatmapCollection, zoneRingCollection]);
 
   useEffect(() => {
     if (!mapReady || !mapRef.current || sosResponsesRef.current.size > 0) return;
@@ -2976,6 +2991,18 @@ function safeWalkStatusLabel(status: SafeWalkUser['status']) {
   return labels[status];
 }
 
+/** Draft geometry for a brand-new city built on the add-city map: a center
+ *  marker, response stations, danger-zone vertex markers, and closed loops
+ *  (each loop becomes one danger zone whose area is the polygon). */
+type CityBuild = {
+  center: Coordinate;
+  stations: Array<{ id: string; name: string; coordinate: Coordinate }>;
+  vertices: Array<{ id: string; coordinate: Coordinate }>;
+  zones: Array<{ id: string; ring: Coordinate[] }>;
+};
+
+const emptyCityBuild = (center: Coordinate): CityBuild => ({ center, stations: [], vertices: [], zones: [] });
+
 type StudioMapItemKind = 'city' | 'stations' | 'drones' | 'dangerZones';
 
 type StudioMapItem = {
@@ -3279,6 +3306,256 @@ function LocationField({ active, onSelect }: { active: boolean; onSelect: () => 
   return <div className="studio-location-field"><div><span>Location target</span><strong>{active ? 'Editing this item on the map below' : 'Choose this item to edit it on the map'}</strong></div><button type="button" aria-pressed={active} className={active ? 'secondary-action active-location' : 'secondary-action'} onClick={onSelect}><MapPin size={15} />{active ? 'Editing on map' : 'Edit on map'}</button></div>;
 }
 
+/** Draw the loop that's currently being selected (dashed) plus every closed
+ *  danger-zone area (filled polygon) on the add-city builder map. */
+function applyCityBuilderOverlay(map: MapLibreMap, build: CityBuild, selection: string[]) {
+  if (!map.getSource('builder-rings')) {
+    map.addSource('builder-rings', { type: 'geojson', data: emptyCollection });
+    map.addLayer({ id: 'builder-zone-fill', type: 'fill', source: 'builder-rings', filter: ['==', ['get', 'kind'], 'zone'], paint: { 'fill-color': '#ef4444', 'fill-opacity': 0.16 } });
+    map.addLayer({ id: 'builder-zone-line', type: 'line', source: 'builder-rings', filter: ['==', ['get', 'kind'], 'zone'], layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#dc2626', 'line-width': 2, 'line-opacity': 0.85 } });
+    map.addLayer({ id: 'builder-selection-line', type: 'line', source: 'builder-rings', filter: ['==', ['get', 'kind'], 'selection'], layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#7c3aed', 'line-width': 2.5, 'line-opacity': 0.9, 'line-dasharray': [2, 1.5] } });
+  }
+  const zoneFeatures = build.zones.map((zone) => ({
+    type: 'Feature' as const,
+    properties: { kind: 'zone' },
+    geometry: { type: 'Polygon' as const, coordinates: [zone.ring] }
+  }));
+  const selectedCoords = selection
+    .map((id) => build.vertices.find((vertex) => vertex.id === id)?.coordinate)
+    .filter((coordinate): coordinate is Coordinate => Boolean(coordinate));
+  const selectionFeature = selectedCoords.length >= 2
+    ? [{ type: 'Feature' as const, properties: { kind: 'selection' }, geometry: { type: 'LineString' as const, coordinates: selectedCoords } }]
+    : [];
+  setSource(map, 'builder-rings', featureCollection([...zoneFeatures, ...selectionFeature]));
+}
+
+function fitBuilderMap(map: MapLibreMap, build: CityBuild) {
+  const coords = [build.center, ...build.stations.map((station) => station.coordinate), ...build.vertices.map((vertex) => vertex.coordinate)];
+  if (!coords.length) return;
+  if (coords.length === 1) {
+    map.jumpTo({ center: coords[0], zoom: 13 });
+    return;
+  }
+  const bounds = coords.reduce((nextBounds, coordinate) => nextBounds.extend(coordinate), new LngLatBounds(coords[0], coords[0]));
+  map.fitBounds(bounds, { padding: 52, maxZoom: 14.5, duration: 600 });
+}
+
+/** The add-city map: drop a center marker, stations, danger-zone vertex
+ *  markers, then connect the vertices into closed loops - each loop becomes a
+ *  danger zone whose area is the polygon.  Mirrors the studio's LocationPicker
+ *  interactions (click to place, drag to move). */
+function CityBuilderMap({ build, onChange, noFlyZones }: {
+  build: CityBuild;
+  onChange: (next: CityBuild) => void;
+  noFlyZones: NoFlyZoneInfo[];
+}) {
+  const mapNode = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<MapLibreMap | null>(null);
+  const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
+  const buildRef = useRef(build);
+  const onChangeRef = useRef(onChange);
+  const noFlyZonesRef = useRef(noFlyZones);
+  const modeRef = useRef<'center' | 'station' | 'danger' | 'connect'>('center');
+  const selectionRef = useRef<string[]>([]);
+  const dragKeyRef = useRef<string | null>(null);
+  const lastDragEndRef = useRef(0);
+  const suppressEaseRef = useRef(false);
+  const fittedKeysRef = useRef('');
+  const [mode, setMode] = useState<'center' | 'station' | 'danger' | 'connect'>('center');
+  const [selection, setSelection] = useState<string[]>([]);
+  const [mapLoaded, setMapLoaded] = useState(false);
+
+  useEffect(() => {
+    buildRef.current = build;
+    onChangeRef.current = onChange;
+    noFlyZonesRef.current = noFlyZones;
+  }, [build, onChange, noFlyZones]);
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+  useEffect(() => { selectionRef.current = selection; }, [selection]);
+
+  useEffect(() => {
+    if (!mapNode.current || mapRef.current) return;
+    const map = new maplibregl.Map({
+      container: mapNode.current,
+      style: lightOsmStyle,
+      center: buildRef.current.center,
+      zoom: 12,
+      attributionControl: { compact: true },
+      pitch: 0,
+      bearing: 0
+    });
+    mapRef.current = map;
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+    map.on('load', () => {
+      setMapLoaded(true);
+      applyNoFlyOverlay(map, noFlyZonesRef.current);
+      applyCityBuilderOverlay(map, buildRef.current, selectionRef.current);
+    });
+    map.on('click', (event) => {
+      if (Date.now() - lastDragEndRef.current < 300) return;
+      const coordinate: Coordinate = [event.lngLat.lng, event.lngLat.lat];
+      const current = buildRef.current;
+      const currentMode = modeRef.current;
+      if (currentMode === 'center') {
+        onChangeRef.current({ ...current, center: coordinate });
+      } else if (currentMode === 'station') {
+        onChangeRef.current({ ...current, stations: [...current.stations, { id: `DST-${String(current.stations.length + 1).padStart(2, '0')}`, name: `Station ${current.stations.length + 1}`, coordinate }] });
+      } else if (currentMode === 'danger') {
+        onChangeRef.current({ ...current, vertices: [...current.vertices, { id: `VP-${String(current.vertices.length + 1).padStart(2, '0')}`, coordinate }] });
+      }
+      // connect mode: only marker clicks build the loop
+    });
+    return () => {
+      markersRef.current.forEach((marker) => marker.remove());
+      markersRef.current.clear();
+      map.remove();
+      mapRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!suppressEaseRef.current) {
+      mapRef.current?.easeTo({ center: build.center, duration: 550 });
+    }
+    suppressEaseRef.current = false;
+  }, [build.center]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    applyNoFlyOverlay(map, noFlyZones);
+    applyCityBuilderOverlay(map, build, selection);
+  }, [noFlyZones, build, selection, mapLoaded]);
+
+  function toggleVertex(vertexId: string) {
+    const current = buildRef.current;
+    const selected = selectionRef.current;
+    const index = selected.indexOf(vertexId);
+    if (index === -1) {
+      setSelection([...selected, vertexId]);
+      return;
+    }
+    if (selected.length >= 3) {
+      // Clicking an already-selected marker closes the loop: the ordered
+      // vertices become a closed ring and that polygon is the danger zone.
+      const ring = selected.map((id) => current.vertices.find((vertex) => vertex.id === id)!.coordinate);
+      const used = new Set(selected);
+      onChangeRef.current({
+        ...current,
+        vertices: current.vertices.filter((vertex) => !used.has(vertex.id)),
+        zones: [...current.zones, { id: `ZONE-${String(current.zones.length + 1).padStart(2, '0')}`, ring: [...ring, ring[0]] }]
+      });
+      setSelection([]);
+    } else {
+      setSelection(selected.filter((id) => id !== vertexId));
+    }
+  }
+
+  // Render center/station/vertex markers; draggable, with loop selection
+  // highlight.  Re-fit only when the marker set changes.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    const markerSpecs: Array<{ key: string; name: string; kind: StudioMapItemKind; coordinate: Coordinate; active: boolean }> = [
+      { key: 'center', name: 'City center', kind: 'city', coordinate: build.center, active: mode === 'center' },
+      ...build.stations.map((station, index) => ({ key: `station:${station.id}`, name: station.name || station.id, kind: 'stations' as const, coordinate: station.coordinate, active: false })),
+      ...build.vertices.map((vertex, index) => ({ key: `vertex:${vertex.id}`, name: `Danger point ${index + 1}`, kind: 'dangerZones' as const, coordinate: vertex.coordinate, active: selection.includes(vertex.id) }))
+    ];
+    const keys = new Set(markerSpecs.map((spec) => spec.key));
+    markersRef.current.forEach((marker, key) => {
+      if (!keys.has(key)) {
+        marker.remove();
+        markersRef.current.delete(key);
+      }
+    });
+    markerSpecs.forEach((spec) => {
+      const existing = markersRef.current.get(spec.key);
+      if (existing) {
+        if (dragKeyRef.current !== spec.key) existing.setLngLat(spec.coordinate);
+        existing.getElement().className = `studio-marker${spec.active ? ' active' : ''}`;
+        return;
+      }
+      const marker = new maplibregl.Marker({ element: studioMarkerElement(spec.name, spec.kind, spec.active), anchor: 'center', draggable: true, subpixelPositioning: true })
+        .setLngLat(spec.coordinate)
+        .addTo(map);
+      marker.on('dragstart', () => { dragKeyRef.current = spec.key; });
+      marker.on('dragend', () => {
+        dragKeyRef.current = null;
+        lastDragEndRef.current = Date.now();
+        suppressEaseRef.current = true;
+        const coordinate = marker.getLngLat().toArray() as Coordinate;
+        const current = buildRef.current;
+        if (spec.key === 'center') {
+          onChangeRef.current({ ...current, center: coordinate });
+        } else if (spec.key.startsWith('station:')) {
+          onChangeRef.current({ ...current, stations: current.stations.map((station) => station.id === spec.key.slice(8) ? { ...station, coordinate } : station) });
+        } else if (spec.key.startsWith('vertex:')) {
+          const id = spec.key.slice(7);
+          onChangeRef.current({ ...current, vertices: current.vertices.map((vertex) => vertex.id === id ? { ...vertex, coordinate } : vertex) });
+        }
+      });
+      marker.getElement().addEventListener('click', () => {
+        if (Date.now() - lastDragEndRef.current < 300) return;
+        if (spec.key.startsWith('vertex:') && modeRef.current === 'connect') {
+          toggleVertex(spec.key.slice(7));
+        }
+      });
+      markersRef.current.set(spec.key, marker);
+    });
+    const keySignature = markerSpecs.map((spec) => spec.key).sort().join('|');
+    if (fittedKeysRef.current !== keySignature) {
+      fittedKeysRef.current = keySignature;
+      fitBuilderMap(map, build);
+    }
+  }, [build, selection, mode, mapLoaded]);
+
+  const hint = mode === 'center'
+    ? 'Click the map to drop the city center marker - it becomes the default map view for this city.'
+    : mode === 'station'
+      ? 'Click the map to drop response station markers. Drag any marker to fine-tune it.'
+      : mode === 'danger'
+        ? 'Click the map to drop danger-zone vertex markers, then switch to Connect loop.'
+        : selection.length === 0
+          ? 'Click danger-zone vertex markers one by one to connect them into a route.'
+          : `Loop in progress (${selection.length} points) - click a marker that is already selected to close the loop into a danger-zone area.`;
+
+  return (
+    <div className="city-builder">
+      <div className="city-builder-heading"><span className="location-picker-eyebrow"><MapPinned size={13} /> City builder</span><strong>Drop markers, then connect danger zones into areas</strong><small>Place the city center, stations, and danger-zone vertex markers on the map below. In Connect loop mode, click vertex markers in order - clicking one that is already selected closes the loop and that polygon becomes the danger-zone area.</small></div>
+      <div className="city-builder-tools">
+        {([['center', 'City center', MapPinned], ['station', 'Station', Radio], ['danger', 'Danger point', AlertTriangle], ['connect', 'Connect loop', Route]] as const).map(([value, label, Icon]) => (
+          <button key={value} type="button" className={mode === value ? 'secondary-action active' : 'secondary-action'} onClick={() => setMode(value)}><Icon size={15} /> {label}</button>
+        ))}
+      </div>
+      <p className="city-builder-hint">{hint}</p>
+      <div className="location-picker-map-frame">
+        <div ref={mapNode} className="location-picker-map city-builder-map" aria-label="Add city map builder" />
+        <div className="location-picker-hint"><MapPin size={13} /> {mode === 'connect' ? 'Click vertex markers to connect them' : 'Click empty map to place'} <strong>{mode === 'center' ? 'city center' : mode === 'station' ? 'station' : mode === 'danger' ? 'danger point' : '·'}</strong></div>
+      </div>
+      <div className="city-builder-lists">
+        <div className="city-builder-list">
+          <strong>Stations ({build.stations.length})</strong>
+          {build.stations.length === 0 ? <span className="city-builder-empty">None placed yet</span> : build.stations.map((station, index) => (
+            <div className="city-builder-item" key={station.id}><span>{station.name || station.id}</span><code>{station.coordinate[1].toFixed(4)}, {station.coordinate[0].toFixed(4)}</code><button type="button" className="icon-button" onClick={() => onChange({ ...build, stations: build.stations.filter((_, i) => i !== index) })} aria-label={`Remove ${station.name || station.id}`}><Trash2 size={13} /></button></div>
+          ))}
+        </div>
+        <div className="city-builder-list">
+          <strong>Danger points ({build.vertices.length})</strong>
+          {build.vertices.length === 0 ? <span className="city-builder-empty">None placed yet</span> : build.vertices.map((vertex, index) => (
+            <div className="city-builder-item" key={vertex.id}><span>Point {index + 1}</span><code>{vertex.coordinate[1].toFixed(4)}, {vertex.coordinate[0].toFixed(4)}</code><button type="button" className="icon-button" onClick={() => onChange({ ...build, vertices: build.vertices.filter((_, i) => i !== index) })} aria-label={`Remove point ${index + 1}`}><Trash2 size={13} /></button></div>
+          ))}
+        </div>
+        <div className="city-builder-list">
+          <strong>Danger zones ({build.zones.length})</strong>
+          {build.zones.length === 0 ? <span className="city-builder-empty">Close a loop to create one</span> : build.zones.map((zone, index) => (
+            <div className="city-builder-item" key={zone.id}><span>{zone.id} · {zone.ring.length - 1} points</span><code>area</code><button type="button" className="icon-button" onClick={() => onChange({ ...build, zones: build.zones.filter((_, i) => i !== index) })} aria-label={`Remove ${zone.id}`}><Trash2 size={13} /></button></div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CommandStudio({ config, initialTab, onTabChange, onClose, onSave, onSwitchCity, onDeleteCity, cities, noFlyZones }: {
   config: SafetyConfig;
   initialTab: StudioTab;
@@ -3301,6 +3578,7 @@ function CommandStudio({ config, initialTab, onTabChange, onClose, onSave, onSwi
   const [newCityName, setNewCityName] = useState('');
   const [newCityCountry, setNewCityCountry] = useState('');
   const [templateId, setTemplateId] = useState('');
+  const [cityBuild, setCityBuild] = useState<CityBuild>(() => emptyCityBuild(draft.city.center));
 
   /** Create a new city profile and switch to it.  A blank grid starts with no
    *  stations/drones/zones; choosing a template clones the source city's grid
@@ -3342,12 +3620,23 @@ function CommandStudio({ config, initialTab, onTabChange, onClose, onSave, onSwi
       next.patrolPoints = next.patrolPoints.map((point) => ({ ...point, id: `${prefix}${point.id}` }));
       next.dangerZones = next.dangerZones.map((zone) => ({ ...zone, id: `${prefix}${zone.id}` }));
     } else {
+      // Blank grid: the city is built on the add-city map - the dropped
+      // center marker becomes the map view, placed stations become response
+      // stations, and each closed danger-zone loop becomes a polygon area.
       next = {
-        city: { id: slug, name, country: newCityCountry.trim() || 'India', center: draft.city.center, zoom: draft.city.zoom },
-        stations: [],
+        city: { id: slug, name, country: newCityCountry.trim() || 'India', center: cityBuild.center, zoom: draft.city.zoom },
+        stations: cityBuild.stations.map((station) => ({ id: station.id, name: station.name, coordinate: station.coordinate })),
         drones: [],
         patrolPoints: [],
-        dangerZones: [],
+        dangerZones: cityBuild.zones.map((zone, index) => ({
+          id: zone.id,
+          name: `Danger zone ${index + 1}`,
+          category: 'General',
+          severity: 0.5,
+          coordinate: zone.ring[0],
+          radiusM: 150,
+          ring: zone.ring
+        })),
         planner: { gridResolutionM: null }
       };
     }
@@ -3358,6 +3647,18 @@ function CommandStudio({ config, initialTab, onTabChange, onClose, onSave, onSwi
     setNewCityName('');
     setNewCityCountry('');
     setTemplateId('');
+    setCityBuild(emptyCityBuild(draft.city.center));
+  };
+  const openAddCity = () => {
+    setAddingCity(true);
+    setCityBuild(emptyCityBuild(draft.city.center));
+  };
+  const cancelAddCity = () => {
+    setAddingCity(false);
+    setNewCityName('');
+    setNewCityCountry('');
+    setTemplateId('');
+    setCityBuild(emptyCityBuild(draft.city.center));
   };
   const tabs: Array<{ id: StudioTab; label: string; icon: React.ReactNode }> = [
     { id: 'city', label: 'City profile', icon: <MapPinned size={15} /> },
@@ -3493,7 +3794,7 @@ function CommandStudio({ config, initialTab, onTabChange, onClose, onSave, onSwi
         </nav>
         <section className="studio-content">
           <LocationPicker label={selectedLocationLabel} coordinate={selectedLocation} onPlace={applyLocation} items={tabItems} activeKey={activeKey} onSelectItem={selectItem} noFlyZones={noFlyZones} patrolRings={patrolRings} />
-          {currentTab === 'city' && <div className="studio-section"><StudioHeading title="Cities" subtitle="Switch the active city, add a new command grid, or remove one." />{cities.length === 0 ? <p className="studio-hint">No saved cities yet - add one below.</p> : <div className="studio-city-list">{cities.map((city) => <div className={`studio-city-card${city.id === config.city.id ? ' active' : ''}`} key={city.id}><div className="studio-city-info"><strong>{city.name}</strong><span className="studio-city-meta">{city.country} · {city.stations} stations · {city.drones} drones · {city.dangerZones} zones</span></div><div className="studio-city-actions">{city.id === config.city.id ? <span className="studio-city-active">Active</span> : <button className="secondary-action" type="button" onClick={() => onSwitchCity(city.id)}>Open</button>}<button className="icon-button" type="button" disabled={cities.length <= 1} onClick={() => onDeleteCity(city.id)} aria-label={`Delete ${city.name}`} title={cities.length <= 1 ? 'Cannot delete the last city' : 'Delete city'}><Trash2 size={15} /></button></div></div>)}</div>}{addingCity ? <div className="studio-add-city"><div className="studio-form-grid"><label>Name<input value={newCityName} onChange={(event) => setNewCityName(event.target.value)} placeholder="e.g. Mumbai" /></label><label>Country<input value={newCityCountry} onChange={(event) => setNewCityCountry(event.target.value)} placeholder="e.g. India" /></label><label>Template<select value={templateId} onChange={(event) => setTemplateId(event.target.value)}><option value="">Blank grid - no stations or drones</option>{cities.map((city) => <option key={city.id} value={city.id}>Copy from {city.name}</option>)}</select></label></div><p className="studio-hint">A blank grid starts empty; a template copies the source city's stations, drones, patrol points, and danger zones (re-id'd so it can't clash with the source).</p><div className="studio-add-city-actions"><button className="secondary-action" type="button" onClick={() => { setAddingCity(false); setNewCityName(''); setNewCityCountry(''); setTemplateId(''); }}>Cancel</button><button className="primary-action" type="button" disabled={saving || !newCityName.trim()} onClick={createCity}>{saving ? 'Creating…' : 'Create city'}</button></div></div> : <button className="secondary-action" type="button" onClick={() => setAddingCity(true)}><Plus size={15} /> Add city</button>}<div style={{ marginTop: 28 }}><StudioHeading title="City profile" subtitle="Name, country, and default map view for the active command grid." /><div className="studio-form-grid"><label>Name<input value={draft.city.name} onChange={(event) => setCity('name', event.target.value)} /></label><label>Country<input value={draft.city.country} onChange={(event) => setCity('country', event.target.value)} /></label><label>Default zoom<input type="number" step="0.1" min="1" max="20" value={draft.city.zoom} onChange={(event) => setCity('zoom', Number(event.target.value))} /></label></div></div></div>}
+          {currentTab === 'city' && <div className="studio-section"><StudioHeading title="Cities" subtitle="Switch the active city, add a new command grid, or remove one." />{cities.length === 0 ? <p className="studio-hint">No saved cities yet - add one below.</p> : <div className="studio-city-list">{cities.map((city) => <div className={`studio-city-card${city.id === config.city.id ? ' active' : ''}`} key={city.id}><div className="studio-city-info"><strong>{city.name}</strong><span className="studio-city-meta">{city.country} · {city.stations} stations · {city.drones} drones · {city.dangerZones} zones</span></div><div className="studio-city-actions">{city.id === config.city.id ? <span className="studio-city-active">Active</span> : <button className="secondary-action" type="button" onClick={() => onSwitchCity(city.id)}>Open</button>}<button className="icon-button" type="button" disabled={cities.length <= 1} onClick={() => onDeleteCity(city.id)} aria-label={`Delete ${city.name}`} title={cities.length <= 1 ? 'Cannot delete the last city' : 'Delete city'}><Trash2 size={15} /></button></div></div>)}</div>}{addingCity ? <div className="studio-add-city"><div className="studio-form-grid"><label>Name<input value={newCityName} onChange={(event) => setNewCityName(event.target.value)} placeholder="e.g. Mumbai" /></label><label>Country<input value={newCityCountry} onChange={(event) => setNewCityCountry(event.target.value)} placeholder="e.g. India" /></label><label>Template<select value={templateId} onChange={(event) => setTemplateId(event.target.value)}><option value="">Blank grid - build it on the map</option>{cities.map((city) => <option key={city.id} value={city.id}>Copy from {city.name}</option>)}</select></label></div>{templateId === '' && <CityBuilderMap build={cityBuild} onChange={setCityBuild} noFlyZones={noFlyZones} />}{templateId !== '' && <p className="studio-hint">A template copies the source city's stations, drones, patrol points, and danger zones (re-id'd so it can't clash with the source). The city center comes from the template's grid.</p>}<div className="studio-add-city-actions"><button className="secondary-action" type="button" onClick={cancelAddCity}>Cancel</button><button className="primary-action" type="button" disabled={saving || !newCityName.trim()} onClick={createCity}>{saving ? 'Creating…' : 'Create city'}</button></div></div> : <button className="secondary-action" type="button" onClick={openAddCity}><Plus size={15} /> Add city</button>}<div style={{ marginTop: 28 }}><StudioHeading title="City profile" subtitle="Name, country, and default map view for the active command grid." /><div className="studio-form-grid"><label>Name<input value={draft.city.name} onChange={(event) => setCity('name', event.target.value)} /></label><label>Country<input value={draft.city.country} onChange={(event) => setCity('country', event.target.value)} /></label><label>Default zoom<input type="number" step="0.1" min="1" max="20" value={draft.city.zoom} onChange={(event) => setCity('zoom', Number(event.target.value))} /></label></div></div></div>}
           {currentTab === 'drones' && <StudioCollection title="Drones" count={draft.drones.length} onAdd={() => addItem('drones')}><div className="studio-list">{draft.drones.map((drone, index) => <div className="studio-card" key={drone.id} data-studio-card={drone.id}><div className="studio-card-title"><strong>{drone.id}</strong><button type="button" className="icon-button" onClick={() => removeItem('drones', index)} aria-label={`Remove ${drone.id}`}><Trash2 size={15} /></button></div><div className="studio-form-grid"><label>Label<input value={drone.label} onChange={(event) => updateItem('drones', index, 'label', event.target.value)} /></label><label>Route name<input value={drone.routeName} onChange={(event) => updateItem('drones', index, 'routeName', event.target.value)} /></label><label>Station<select value={drone.stationId || ''} onChange={(event) => updateItem('drones', index, 'stationId', event.target.value)}><option value="">Unassigned</option>{draft.stations.map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label><label>Role<select value={drone.role || 'Patrol'} onChange={(event) => updateItem('drones', index, 'role', event.target.value)}><option value="Patrol">Patrol</option><option value="Reserve">Reserve</option></select></label><label>Battery %<input type="number" min="0" max="100" value={drone.battery} onChange={(event) => updateItem('drones', index, 'battery', Number(event.target.value))} /></label></div><LocationField active={locationTarget.kind === 'drones' && locationTarget.index === index} onSelect={() => selectLocation('drones', index)} /></div>)}</div></StudioCollection>}
           {currentTab === 'stations' && <StudioCollection title="Response stations" count={draft.stations.length} onAdd={() => addItem('stations')}><div className="studio-list">{draft.stations.map((station, index) => <div className="studio-card" key={station.id} data-studio-card={station.id}><div className="studio-card-title"><strong>{station.id}</strong><button type="button" className="icon-button" onClick={() => removeItem('stations', index)} aria-label={`Remove ${station.id}`}><Trash2 size={15} /></button></div><div className="studio-form-grid"><label>Name<input value={station.name} onChange={(event) => updateItem('stations', index, 'name', event.target.value)} /></label><label>Assigned drone<select value={station.droneId || ''} onChange={(event) => updateItem('stations', index, 'droneId', event.target.value)}><option value="">Unassigned</option>{draft.drones.filter((drone) => drone.role !== 'Reserve').map((drone) => <option key={drone.id} value={drone.id}>{drone.id}</option>)}</select></label><label>Reserve drone<select value={station.reserveDroneId || ''} onChange={(event) => updateItem('stations', index, 'reserveDroneId', event.target.value)}><option value="">Unassigned</option>{draft.drones.filter((drone) => drone.role === 'Reserve').map((drone) => <option key={drone.id} value={drone.id}>{drone.id}</option>)}</select></label></div><LocationField active={locationTarget.kind === 'stations' && locationTarget.index === index} onSelect={() => selectLocation('stations', index)} /></div>)}</div></StudioCollection>}
           {currentTab === 'danger' && <StudioCollection title="Danger zones" count={draft.dangerZones.length} onAdd={() => addItem('dangerZones')}><div className="studio-list">{draft.dangerZones.map((zone, index) => <div className="studio-card" key={zone.id} data-studio-card={zone.id}><div className="studio-card-title"><strong>{zone.id}</strong><button type="button" className="icon-button" onClick={() => removeItem('dangerZones', index)} aria-label={`Remove ${zone.id}`}><Trash2 size={15} /></button></div><div className="studio-form-grid"><label>Name<input value={zone.name} onChange={(event) => updateItem('dangerZones', index, 'name', event.target.value)} /></label><label>Category<input value={zone.category} onChange={(event) => updateItem('dangerZones', index, 'category', event.target.value)} /></label><label>Severity<input type="number" min="0" max="1" step="0.01" value={zone.severity} onChange={(event) => updateItem('dangerZones', index, 'severity', Number(event.target.value))} /></label><label>Radius (m)<input type="number" min="1" value={zone.radiusM} onChange={(event) => updateItem('dangerZones', index, 'radiusM', Number(event.target.value))} /></label></div><LocationField active={locationTarget.kind === 'dangerZones' && locationTarget.index === index} onSelect={() => selectLocation('dangerZones', index)} /></div>)}</div></StudioCollection>}
@@ -3638,6 +3939,7 @@ function addSourcesAndLayers(map: MapLibreMap) {
   map.addSource(sources.hotspots, { type: 'geojson', data: emptyCollection });
   map.addSource(sources.riskHeatmap, { type: 'geojson', data: emptyCollection });
   map.addSource(sources.noFlyZones, { type: 'geojson', data: emptyCollection, tolerance: 0 });
+  map.addSource(sources.zoneRings, { type: 'geojson', data: emptyCollection, tolerance: 0 });
 
   map.addLayer({
     id: 'risk-heatmap',
@@ -3679,6 +3981,10 @@ function addSourcesAndLayers(map: MapLibreMap) {
   map.addLayer({ id: 'drone-station-halo', type: 'circle', source: sources.droneStations, minzoom: DETAIL_LAYER_MIN_ZOOM, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 13, 15, 22], 'circle-color': '#0891b2', 'circle-opacity': 0.16, 'circle-blur': 0.35 } });
   map.addLayer({ id: 'drone-stations', type: 'circle', source: sources.droneStations, minzoom: DETAIL_LAYER_MIN_ZOOM, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 6, 15, 9], 'circle-color': '#0891b2', 'circle-stroke-color': '#f8fafc', 'circle-stroke-width': 2 } });
   map.addLayer({ id: 'unclustered-hotspot', type: 'circle', source: sources.hotspots, minzoom: DETAIL_LAYER_MIN_ZOOM, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 11.6, ['max', 4, ['*', ['get', 'radiusM'], 0.018]], 16, ['max', 8, ['*', ['get', 'radiusM'], 0.08]]], 'circle-color': '#ef4444', 'circle-opacity': ['interpolate', ['linear'], ['zoom'], 11.6, 0, 12.2, 0.9], 'circle-stroke-color': '#f8fafc', 'circle-stroke-width': 2 } });
+  // Polygon-area danger zones (built from rings in the studio) - soft red fill
+  // with a solid boundary, so a looped danger zone area reads as one region.
+  map.addLayer({ id: 'zone-rings-fill', type: 'fill', source: sources.zoneRings, paint: { 'fill-color': '#ef4444', 'fill-opacity': 0.16 } });
+  map.addLayer({ id: 'zone-rings-line', type: 'line', source: sources.zoneRings, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#dc2626', 'line-width': 2, 'line-opacity': 0.85 } });
   map.addLayer({ id: 'target-halo', type: 'circle', source: sources.sosTarget, minzoom: DETAIL_LAYER_MIN_ZOOM, paint: { 'circle-radius': 28, 'circle-color': '#a855f7', 'circle-opacity': 0.18, 'circle-blur': 0.38 } });
   map.addLayer({ id: 'target-point', type: 'circle', source: sources.sosTarget, minzoom: DETAIL_LAYER_MIN_ZOOM, paint: { 'circle-radius': 8, 'circle-color': '#a855f7', 'circle-stroke-color': '#faf5ff', 'circle-stroke-width': 2 } });
   map.addLayer({ id: 'safe-points', type: 'circle', source: sources.safePoints, minzoom: DETAIL_LAYER_MIN_ZOOM, paint: { 'circle-radius': 8, 'circle-color': ['match', ['get', 'kind'], 'origin', '#22c55e', '#2563eb'], 'circle-stroke-color': '#f8fafc', 'circle-stroke-width': 2 } });

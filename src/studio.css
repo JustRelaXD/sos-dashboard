@@ -108,3 +108,22 @@
 .studio-city-actions .icon-button:disabled { opacity: .35; cursor: not-allowed; transform: none; }
 .studio-add-city { margin: 4px 0 16px; padding: 16px; border: 1px dashed rgba(8, 145, 178, .45); border-radius: 12px; background: rgba(224, 242, 254, .4); }
 .studio-add-city-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+
+/* -- City builder (add-city map) --------------------------------------- */
+.city-builder { display: grid; gap: 12px; margin-top: 16px; padding: 14px; border: 1px solid rgba(8, 145, 178, .2); border-radius: 12px; background: rgba(255, 255, 255, .5); }
+.city-builder-heading { display: grid; gap: 4px; }
+.city-builder-heading strong { color: var(--text); font-size: 14px; font-weight: 800; }
+.city-builder-heading small { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.city-builder-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+.city-builder-tools .secondary-action.active { border-color: rgba(8, 145, 178, .65); color: #0e7490; background: rgba(224, 242, 254, .85); box-shadow: 0 0 0 3px rgba(34, 211, 238, .18); }
+.city-builder-hint { margin: 0; color: #475569; font-size: 12px; line-height: 1.5; }
+.city-builder-map { height: 340px; }
+.city-builder-lists { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.city-builder-list { display: grid; gap: 6px; align-content: start; padding: 10px; border: 1px solid rgba(148, 163, 184, .22); border-radius: 10px; background: rgba(255, 255, 255, .6); }
+.city-builder-list > strong { color: var(--text); font-size: 11px; font-weight: 850; letter-spacing: .05em; text-transform: uppercase; }
+.city-builder-empty { color: var(--muted); font-size: 12px; }
+.city-builder-item { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 5px 7px; border-radius: 7px; background: rgba(241, 245, 249, .8); }
+.city-builder-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #334155; font-size: 12px; font-weight: 650; }
+.city-builder-item code { color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+.city-builder-item .icon-button { flex: none; }
+@media (max-width: 860px) { .city-builder-lists { grid-template-columns: 1fr; } }

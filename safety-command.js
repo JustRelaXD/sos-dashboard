@@ -87,7 +87,7 @@ const schemaSql = `
     id text PRIMARY KEY, city_id text NOT NULL REFERENCES safety_command.city_profiles(id) ON DELETE CASCADE,
     name text NOT NULL, category text NOT NULL DEFAULT 'General', severity numeric(4,3) NOT NULL DEFAULT 0.5 CHECK (severity BETWEEN 0 AND 1),
     longitude numeric(10,7) NOT NULL, latitude numeric(10,7) NOT NULL, radius_m integer NOT NULL DEFAULT 150 CHECK (radius_m > 0),
-    updated_at timestamptz NOT NULL DEFAULT now()
+    ring jsonb, updated_at timestamptz NOT NULL DEFAULT now()
   );
   CREATE TABLE IF NOT EXISTS safety_command.sos_log (
     id text PRIMARY KEY,
@@ -133,6 +133,7 @@ const schemaSql = `
   ALTER TABLE safety_command.stations ADD COLUMN IF NOT EXISTS reserve_drone_id text;
   ALTER TABLE safety_command.drones ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'Patrol';
   ALTER TABLE safety_command.drones ADD COLUMN IF NOT EXISTS coverage_for_drone_id text;
+  ALTER TABLE safety_command.danger_zones ADD COLUMN IF NOT EXISTS ring jsonb;
 `;
 
 // How many invisible spare drones every station keeps parked, available to
@@ -190,7 +191,10 @@ function normalizeConfig(input = {}) {
     category: String(item.category || 'General').trim().slice(0, 80),
     severity: Math.min(1, Math.max(0, numberOr(item.severity, 0.5))),
     coordinate: coordinateOr(item.coordinate, cityConfig.center),
-    radiusM: Math.max(1, Math.round(numberOr(item.radiusM, 150)))
+    radiusM: Math.max(1, Math.round(numberOr(item.radiusM, 150))),
+    ring: Array.isArray(item.ring) && item.ring.length >= 3
+      ? item.ring.map((coord) => coordinateOr(coord, cityConfig.center))
+      : null
   }));
   // Route-planner tuning.  gridResolutionM null = auto (the planner picks a
   // 5 m grid up to 10 km and 10 m beyond); a number forces that grid for
@@ -420,8 +424,8 @@ async function saveConfig(client, rawConfig) {
       [point.id, config.city.id, point.name, point.coordinate[0], point.coordinate[1], point.sequence]
     );
     for (const zone of config.dangerZones) await client.query(
-      'INSERT INTO safety_command.danger_zones (id, city_id, name, category, severity, longitude, latitude, radius_m) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-      [zone.id, config.city.id, zone.name, zone.category, zone.severity, zone.coordinate[0], zone.coordinate[1], zone.radiusM]
+      'INSERT INTO safety_command.danger_zones (id, city_id, name, category, severity, longitude, latitude, radius_m, ring) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+      [zone.id, config.city.id, zone.name, zone.category, zone.severity, zone.coordinate[0], zone.coordinate[1], zone.radiusM, zone.ring ? JSON.stringify(zone.ring) : null]
     );
     await client.query('COMMIT');
   } catch (error) {
@@ -442,13 +446,13 @@ async function readConfig(client, cityId = 'mangalore') {
   const stations = await client.query('SELECT id, name, longitude, latitude, drone_id, reserve_drone_id FROM safety_command.stations WHERE city_id = $1 ORDER BY id', [cityId]);
   const drones = await client.query('SELECT id, label, status, battery, response, station_id, role, coverage_for_drone_id, position_longitude, position_latitude, route_name, route FROM safety_command.drones WHERE city_id = $1 ORDER BY id', [cityId]);
   const patrolPoints = await client.query('SELECT id, name, longitude, latitude, sequence FROM safety_command.patrol_points WHERE city_id = $1 ORDER BY sequence, id', [cityId]);
-  const dangerZones = await client.query('SELECT id, name, category, severity, longitude, latitude, radius_m FROM safety_command.danger_zones WHERE city_id = $1 ORDER BY id', [cityId]);
+  const dangerZones = await client.query('SELECT id, name, category, severity, longitude, latitude, radius_m, ring FROM safety_command.danger_zones WHERE city_id = $1 ORDER BY id', [cityId]);
   return {
     city: { id: city.id, name: city.name, country: city.country, center: [Number(city.center_longitude), Number(city.center_latitude)], zoom: Number(city.zoom) },
     stations: stations.rows.map((row) => ({ id: row.id, name: row.name, coordinate: [Number(row.longitude), Number(row.latitude)], droneId: row.drone_id, reserveDroneId: row.reserve_drone_id })),
     drones: drones.rows.map((row) => ({ id: row.id, label: row.label, status: row.status, battery: row.battery, response: row.response, stationId: row.station_id, role: row.role, coverageForDroneId: row.coverage_for_drone_id, position: [Number(row.position_longitude), Number(row.position_latitude)], routeName: row.route_name, route: row.route || [] })),
     patrolPoints: patrolPoints.rows.map((row) => ({ id: row.id, name: row.name, coordinate: [Number(row.longitude), Number(row.latitude)], sequence: row.sequence })),
-    dangerZones: dangerZones.rows.map((row) => ({ id: row.id, name: row.name, category: row.category, severity: Number(row.severity), coordinate: [Number(row.longitude), Number(row.latitude)], radiusM: row.radius_m })),
+    dangerZones: dangerZones.rows.map((row) => ({ id: row.id, name: row.name, category: row.category, severity: Number(row.severity), coordinate: [Number(row.longitude), Number(row.latitude)], radiusM: row.radius_m, ring: Array.isArray(row.ring) ? row.ring : (row.ring ? JSON.parse(row.ring) : null) })),
     planner: { gridResolutionM: city.grid_resolution_m === null ? null : Number(city.grid_resolution_m) }
   };
 }

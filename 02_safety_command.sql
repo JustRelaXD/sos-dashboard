@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS safety_command.danger_zones (
   longitude numeric(10,7) NOT NULL,
   latitude numeric(10,7) NOT NULL,
   radius_m integer NOT NULL DEFAULT 150 CHECK (radius_m > 0),
+  ring jsonb,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
