@@ -401,16 +401,20 @@ async function saveConfig(client, rawConfig) {
     `, [config.city.id, config.city.name, config.city.country, config.city.center[0], config.city.center[1], config.city.zoom, config.planner.gridResolutionM]);
     // Replace this city's rows (handles removals), then also clear any rows
     // from other cities that share the global id space - the tables use bare
-    // `id` primary keys, so orphaned leftovers from a previous city profile
-    // would otherwise make the inserts below fail with a duplicate-key error.
+    // `id` primary keys, so orphaned leftovers from a previous profile of
+    // THIS city would otherwise make the inserts below fail with a
+    // duplicate-key error.  The id-based deletes are scoped to the city so
+    // re-saving one city can never delete another city's rows that happen to
+    // share an id (ids are globally unique, so collisions are impossible when
+    // every city prefixes its entity ids with its own slug).
     await client.query('DELETE FROM safety_command.stations WHERE city_id = $1', [config.city.id]);
-    await client.query('DELETE FROM safety_command.stations WHERE id = ANY($1)', [config.stations.map((station) => station.id)]);
+    await client.query('DELETE FROM safety_command.stations WHERE id = ANY($1) AND city_id = $2', [config.stations.map((station) => station.id), config.city.id]);
     await client.query('DELETE FROM safety_command.drones WHERE city_id = $1', [config.city.id]);
-    await client.query('DELETE FROM safety_command.drones WHERE id = ANY($1)', [config.drones.map((drone) => drone.id)]);
+    await client.query('DELETE FROM safety_command.drones WHERE id = ANY($1) AND city_id = $2', [config.drones.map((drone) => drone.id), config.city.id]);
     await client.query('DELETE FROM safety_command.patrol_points WHERE city_id = $1', [config.city.id]);
-    await client.query('DELETE FROM safety_command.patrol_points WHERE id = ANY($1)', [config.patrolPoints.map((point) => point.id)]);
+    await client.query('DELETE FROM safety_command.patrol_points WHERE id = ANY($1) AND city_id = $2', [config.patrolPoints.map((point) => point.id), config.city.id]);
     await client.query('DELETE FROM safety_command.danger_zones WHERE city_id = $1', [config.city.id]);
-    await client.query('DELETE FROM safety_command.danger_zones WHERE id = ANY($1)', [config.dangerZones.map((zone) => zone.id)]);
+    await client.query('DELETE FROM safety_command.danger_zones WHERE id = ANY($1) AND city_id = $2', [config.dangerZones.map((zone) => zone.id), config.city.id]);
     for (const station of config.stations) await client.query(
       'INSERT INTO safety_command.stations (id, city_id, name, longitude, latitude, drone_id, reserve_drone_id) VALUES ($1,$2,$3,$4,$5,$6,$7)',
       [station.id, config.city.id, station.name, station.coordinate[0], station.coordinate[1], station.droneId, station.reserveDroneId]

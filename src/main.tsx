@@ -3623,13 +3623,15 @@ function CommandStudio({ config, initialTab, onTabChange, onClose, onSave, onSwi
       // Blank grid: the city is built on the add-city map - the dropped
       // center marker becomes the map view, placed stations become response
       // stations, and each closed danger-zone loop becomes a polygon area.
+      // Entity ids are prefixed with the new city's slug so they can never
+      // collide with another city's globally-unique primary keys.
       next = {
         city: { id: slug, name, country: newCityCountry.trim() || 'India', center: cityBuild.center, zoom: draft.city.zoom },
-        stations: cityBuild.stations.map((station) => ({ id: station.id, name: station.name, coordinate: station.coordinate })),
+        stations: cityBuild.stations.map((station) => ({ id: `${slug}-${station.id}`, name: station.name, coordinate: station.coordinate })),
         drones: [],
         patrolPoints: [],
         dangerZones: cityBuild.zones.map((zone, index) => ({
-          id: zone.id,
+          id: `${slug}-${zone.id}`,
           name: `Danger zone ${index + 1}`,
           category: 'General',
           severity: 0.5,
@@ -3692,10 +3694,14 @@ function CommandStudio({ config, initialTab, onTabChange, onClose, onSave, onSwi
     });
   };
   const removeItem = (kind: 'stations' | 'drones' | 'dangerZones', index: number) => setDraft((current) => ({ ...current, [kind]: current[kind].filter((_, itemIndex) => itemIndex !== index) } as SafetyConfig));
+  // Entity ids are globally unique (primary keys) across every city, so new
+  // items are prefixed with the city slug - bare DST-01/DRN-01/ZONE-01 would
+  // collide with other cities' rows on save.
   const addItem = (kind: 'stations' | 'drones' | 'dangerZones') => setDraft((current) => {
-    if (kind === 'stations') return { ...current, stations: [...current.stations, { id: `DST-${String(current.stations.length + 1).padStart(2, '0')}`, name: 'New response station', coordinate: current.city.center, droneId: null }] };
-    if (kind === 'drones') return { ...current, drones: [...current.drones, { id: `DRN-${String(current.drones.length + 1).padStart(2, '0')}`, label: 'New safety drone', stationId: '', status: 'Patrol', role: 'Patrol', coverageForDroneId: null, battery: 100, response: 'standby', position: current.city.center, route: [current.city.center], routeName: 'Custom patrol route' }] };
-    return { ...current, dangerZones: [...current.dangerZones, { id: `ZONE-${String(current.dangerZones.length + 1).padStart(2, '0')}`, name: 'New danger zone', category: 'General', severity: 0.5, coordinate: current.city.center, radiusM: 150 }] };
+    const prefix = `${current.city.id}-`;
+    if (kind === 'stations') return { ...current, stations: [...current.stations, { id: `${prefix}DST-${String(current.stations.length + 1).padStart(2, '0')}`, name: 'New response station', coordinate: current.city.center, droneId: null }] };
+    if (kind === 'drones') return { ...current, drones: [...current.drones, { id: `${prefix}DRN-${String(current.drones.length + 1).padStart(2, '0')}`, label: 'New safety drone', stationId: '', status: 'Patrol', role: 'Patrol', coverageForDroneId: null, battery: 100, response: 'standby', position: current.city.center, route: [current.city.center], routeName: 'Custom patrol route' }] };
+    return { ...current, dangerZones: [...current.dangerZones, { id: `${prefix}ZONE-${String(current.dangerZones.length + 1).padStart(2, '0')}`, name: 'New danger zone', category: 'General', severity: 0.5, coordinate: current.city.center, radiusM: 150 }] };
   });
   const updateItem = (kind: 'stations' | 'drones' | 'dangerZones', index: number, field: string, value: string | number) => setDraft((current) => ({
     ...current,
