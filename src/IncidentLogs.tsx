@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Search, Filter, Plus, ArrowRight, MapPin, Clock, User, Shield } from 'lucide-react';
+import { Search, Filter, ArrowRight, MapPin, Shield } from 'lucide-react';
 
 /** Core incident fields per spec */
 type Incident = {
@@ -217,9 +217,7 @@ export function IncidentLogs() {
           </div>
           <p className="il-subtitle">Live safety incident reports and response activity.</p>
         </div>
-        <button className="il-new-incident" type="button">
-          <Plus size={15} /> Log incident
-        </button>
+
       </div>
 
       <div className="il-summary-strip">
