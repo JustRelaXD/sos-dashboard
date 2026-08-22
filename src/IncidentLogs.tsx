@@ -188,11 +188,6 @@ export function IncidentLogs() {
     setSearchTerm('');
   };
 
-  const geofenceZones = useMemo(() => deriveGeofenceZones(filtered), [filtered]);
-  const highRiskZones = geofenceZones.filter((z) => z.riskLevel === 'High Risk').length;
-
-  const hasFilters = activeCategories.size > 0 || activeSeverities.size > 0 || searchTerm.length > 0;
-
   const filtered = useMemo(() => {
     return incidents.filter((incident) => {
       const catMatch = activeCategories.size === 0 || activeCategories.has(incident.category);
@@ -201,6 +196,11 @@ export function IncidentLogs() {
       return catMatch && sevMatch && haystack.includes(searchTerm.toLowerCase());
     });
   }, [searchTerm, activeCategories, activeSeverities]);
+
+  const geofenceZones = useMemo(() => deriveGeofenceZones(filtered), [filtered]);
+  const highRiskZones = geofenceZones.filter((z) => z.riskLevel === 'High Risk').length;
+
+  const hasFilters = activeCategories.size > 0 || activeSeverities.size > 0 || searchTerm.length > 0;
 
   const criticalCount = incidents.filter((i) => i.severity === 'Critical' && i.status !== 'Resolved').length;
   const openCount = incidents.filter((i) => i.status !== 'Resolved').length;
