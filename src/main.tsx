@@ -695,7 +695,7 @@ function App() {
     if (!deckVisible || operationsOpen) return;
     const hideTimer = window.setTimeout(() => {
       if (!deckHoverRef.current) setDeckVisible(false);
-    }, 5000);
+    }, 3000);
     return () => window.clearTimeout(hideTimer);
   }, [deckVisible, operationsOpen, activeView]);
 
