@@ -482,7 +482,7 @@ p {
 
 .legend {
   position: fixed;
-  right: 16px;
+  right: calc(40vw + 16px);
   bottom: 16px;
   z-index: 8;
   display: grid;
