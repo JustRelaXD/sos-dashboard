@@ -47,6 +47,7 @@ import {
   type NoFlyZoneInfo,
   type RouteResponse
 } from './planner';
+import { dispatchSitlMission, getSitlStatus, subscribeSitlTelemetry, type SitlPhase } from './sitl';
 import { patialaConfig } from './patiala';
 import './studio.css';
 
@@ -104,6 +105,9 @@ type SosResponse = {
   tweens: gsap.core.Tween[];
   timers: number[];
   startedAt: number;
+  /** Set when this response is flown by the real SITL copter; closes the
+   *  telemetry stream (e.g. when the operator ends the SOS mid-mission). */
+  sitlUnsubscribe?: () => void;
 };
 
 type SafeWalk = {
@@ -321,6 +325,24 @@ function isPoolDrone(drone: Drone) {
   return drone.role === 'Reserve' || drone.role === 'Spare';
 }
 
+/** How long the SITL copter loiters over the SOS target before returning. */
+const SITL_LOITER_SECONDS = 30;
+
+/** Map a live SITL phase onto the dashboard's Drone status field. */
+function sitlStatusForPhase(phase: SitlPhase): Drone['status'] {
+  if (phase === 'EN_ROUTE') return 'Dispatching';
+  if (phase === 'HOVERING' || phase === 'RTL') return 'Monitoring';
+  return 'Patrol';
+}
+
+/** Map a live SITL phase onto the human label shown in the drone list. */
+function sitlResponseForPhase(phase: SitlPhase): string {
+  if (phase === 'EN_ROUTE') return 'SITL en route';
+  if (phase === 'HOVERING') return 'SITL on scene';
+  if (phase === 'RTL') return 'SITL returning';
+  return 'SITL patrolling';
+}
+
 function patrolConfigSignature(nextDrones: Drone[]) {
   return JSON.stringify(nextDrones.map(({ id, status, role, position, route, routeName }) => ({ id, status, role, position, route, routeName })));
 }
@@ -460,6 +482,12 @@ function App() {
     try { return window.localStorage.getItem('sos-dashboard:activeCity') || 'patiala'; } catch { return 'patiala'; }
   });
   const [cities, setCities] = useState<CitySummary[]>([]);
+  // Local ArduPilot SITL bridge status (polled).  Dispatch uses the ref so it
+  // always reads the freshest value without re-subscribing effects; the state
+  // only drives the small SITL/SIM pill in the top bar.
+  const [sitlAvailable, setSitlAvailable] = useState(false);
+  const [sitlPhase, setSitlPhase] = useState<SitlPhase | null>(null);
+  const sitlStatusRef = useRef<{ available: boolean; phase: SitlPhase | null }>({ available: false, phase: null });
   const [studioOpen, setStudioOpen] = useState(false);
   const [studioTab, setStudioTab] = useState<StudioTab>('city');
   const [drones, setDrones] = useState<Drone[]>([]);
@@ -589,6 +617,27 @@ function App() {
   }, []);
 
   useEffect(() => { refreshCities(); }, [refreshCities]);
+
+  // Poll the local SITL bridge so an SOS can be handed to the real simulated
+  // copter when it is online and patrolling.  The GSAP simulation remains the
+  // fallback whenever the bridge is unreachable - polling failures are silent.
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      const status = await getSitlStatus();
+      if (cancelled) return;
+      const available = Boolean(status?.ok && status.connected);
+      sitlStatusRef.current = { available, phase: status?.phase ?? null };
+      setSitlAvailable(available);
+      setSitlPhase(status?.phase ?? null);
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   const deleteCity = async (cityId: string) => {
     if (!window.confirm(`Delete ${cityId}? This removes its stations, drones, zones, and logs from Neon.`)) return;
@@ -1694,6 +1743,10 @@ function App() {
   function completeSosResponse(sosId: string) {
     const response = sosResponsesRef.current.get(sosId);
     if (!response) return;
+    // Stop tracking the real copter (operator ended the SOS mid-mission) -
+    // the SITL copter itself keeps flying its own mission to completion.
+    response.sitlUnsubscribe?.();
+    response.sitlUnsubscribe = undefined;
     response.timers.forEach((timer) => window.clearTimeout(timer));
     response.tweens.forEach((tween) => tween.kill());
     response.tweens = [];
@@ -1934,6 +1987,70 @@ function App() {
     }, 4000));
   }
 
+  /** Hand the SOS to the local ArduPilot SITL copter when the bridge is
+   *  online and the copter is patrolling.  Returns true when the mission was
+   *  accepted - the caller then skips the simulated GSAP flight.  The copter
+   *  flies EN_ROUTE -> HOVERING (loiter) -> RTL itself; telemetry moves this
+   *  drone's marker live, and returning to PATROL ends the response. */
+  async function trySitlDispatch(sosId: string, droneId: string, target: Coordinate): Promise<boolean> {
+    const status = sitlStatusRef.current;
+    if (!status.available || status.phase !== 'PATROL') return false;
+    const map = mapRef.current;
+    const drone = dronesRef.current.find((item) => item.id === droneId)
+      || safetyConfigRef.current.drones.find((item) => item.id === droneId);
+    if (!map || !drone) return false;
+
+    const mission = await dispatchSitlMission({ lat: target[1], lon: target[0], loiterSeconds: SITL_LOITER_SECONDS });
+    if (!mission.ok) return false; // busy or unreachable - fall back to simulation
+
+    if (isPoolDrone(drone)) setDroneMarkerVisible(droneId, true);
+    setDrones((current) => current.map((item) => item.id === droneId ? { ...item, status: 'Dispatching', response: 'SITL en route' } : item));
+    setTimeline((current) => [
+      { time: 'Now', label: `${droneId} handed to SITL`, detail: `Real ArduPilot copter flying to ${sosId} (${target[1].toFixed(4)}, ${target[0].toFixed(4)}), loiter ${SITL_LOITER_SECONDS}s.` },
+      ...current
+    ].slice(0, 8));
+    setToast(`SITL mission ${mission.missionId || 'accepted'} - ${droneId} en route`);
+
+    // Snap the marker to the copter's current position before the first
+    // telemetry frame arrives, so it does not sit at the old simulated spot.
+    const initial = await getSitlStatus();
+    if (initial && Number.isFinite(initial.lat) && Number.isFinite(initial.lon)) {
+      updateDronePosition(droneId, [initial.lon, initial.lat], false);
+    }
+
+    // A mission starts with the copter still reporting PATROL for a moment;
+    // only treat PATROL as "done" after we have seen a non-PATROL phase.
+    let seenNonPatrol = false;
+    let lastPhaseLabel = '';
+    const unsubscribe = subscribeSitlTelemetry((telemetry) => {
+      if (!sosResponsesRef.current.has(sosId)) {
+        unsubscribe();
+        return;
+      }
+      // Move the marker every frame; only re-render the drone list when the
+      // status label actually changes (telemetry streams ~10x/sec).
+      updateDronePosition(droneId, [telemetry.lon, telemetry.lat], false);
+      const phaseLabel = `${sitlStatusForPhase(telemetry.phase)}|${sitlResponseForPhase(telemetry.phase)}`;
+      if (phaseLabel !== lastPhaseLabel) {
+        lastPhaseLabel = phaseLabel;
+        setDrones((current) => current.map((item) => item.id === droneId
+          ? { ...item, status: sitlStatusForPhase(telemetry.phase), response: sitlResponseForPhase(telemetry.phase) }
+          : item));
+      }
+      if (telemetry.phase !== 'PATROL') {
+        seenNonPatrol = true;
+      } else if (seenNonPatrol) {
+        // Mission complete: copter is back on patrol - close the stream and
+        // run the normal post-incident cleanup (resume patrol loop, resolve).
+        unsubscribe();
+        completeSosResponse(sosId);
+      }
+    });
+    const response = sosResponsesRef.current.get(sosId);
+    if (response) response.sitlUnsubscribe = unsubscribe;
+    return true;
+  }
+
   async function dispatchDrone(sosId: string, droneId: string, target: Coordinate, status: Drone['status'], showPostArrivalBanners = false, sourceCoordinate?: Coordinate) {
     const drone = dronesRef.current.find((item) => item.id === droneId) || safetyConfigRef.current.drones.find((item) => item.id === droneId);
     const map = mapRef.current;
@@ -1945,6 +2062,9 @@ function App() {
 
     if (usesPatrolDrone) patrolTweensRef.current.get(droneId)?.pause();
     resetRouteLayerOpacities(map, ['active-route-glow', 'active-route']);
+    // Real SITL copter available and patrolling: hand the mission over and
+    // skip the simulated GSAP flight entirely.  Falls back silently below.
+    if (await trySitlDispatch(sosId, droneId, safeTarget)) return;
     setToast(`Optimizing dispatch route for ${droneId}...`);
 
     // The drone flies the planner's building-avoiding route from the start -
@@ -2625,6 +2745,10 @@ function App() {
       <motion.header className="glass-panel top-dock" initial={{ y: -26, opacity: 0 }} animate={{ y: 0, opacity: 1 }}>
         <div className="top-title">
           <strong>Dashboard</strong>
+          <span className={`sitl-pill${sitlAvailable ? ' live' : ''}`} title={sitlAvailable && sitlPhase ? `SITL bridge online - phase ${sitlPhase}` : 'SITL bridge offline - flights are simulated (GSAP)'}>
+            <span className="sitl-pill-dot" />
+            {sitlAvailable ? `SITL ${sitlPhase ?? 'LIVE'}` : 'SIM'}
+          </span>
         </div>
         <div className="top-actions">
           <button
