@@ -176,6 +176,29 @@ p {
   border-radius: 10px;
 }
 
+.deck-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.8);
+  color: #64748b;
+  cursor: pointer;
+  transition: 0.16s;
+}
+
+.deck-close:hover {
+  border-color: rgba(8, 145, 178, 0.45);
+  background: rgba(224, 242, 254, 0.9);
+  color: #0e7490;
+}
+
 @media (max-width: 820px) {
   .action-deck {
     width: min(390px, calc(100vw - 32px));

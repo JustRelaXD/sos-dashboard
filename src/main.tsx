@@ -453,6 +453,10 @@ function App() {
   const [routeProgress, setRouteProgress] = useState(0);
   const [safeWalk, setSafeWalk] = useState<SafeWalk>({ origin: null, destination: null, eta: 0, status: 'Select origin on map' });
   const [operationsOpen, setOperationsOpen] = useState(false);
+  // Action deck (left panel under the top bar): closable + auto-hides after a
+  // few seconds unless the pointer is hovering over it.
+  const [deckVisible, setDeckVisible] = useState(true);
+  const deckHoverRef = useRef(false);
   const [sosTargetVisible, setSosTargetVisible] = useState(false);
   const [sosBanner, setSosBanner] = useState<string | null>(null);
   const [sosPicking, setSosPicking] = useState(false);
@@ -684,6 +688,16 @@ function App() {
     startPatrols(safetyConfig.drones);
     map.easeTo({ center: safetyConfig.city.center, zoom: safetyConfig.city.zoom, duration: 700 });
   }, [safetyConfig, mapReady]);
+
+  // Auto-hide the action deck a few seconds after it appears (or after the
+  // view changes) unless the pointer is hovering over it.
+  useEffect(() => {
+    if (!deckVisible || operationsOpen) return;
+    const hideTimer = window.setTimeout(() => {
+      if (!deckHoverRef.current) setDeckVisible(false);
+    }, 5000);
+    return () => window.clearTimeout(hideTimer);
+  }, [deckVisible, operationsOpen, activeView]);
 
   useEffect(() => {
     liveTickerRef.current = window.setInterval(() => {
@@ -2501,6 +2515,7 @@ function App() {
               type="button"
               onClick={() => {
                 setOperationsOpen(false);
+                setDeckVisible(true);
                 setActiveView(view);
               }}
             >
@@ -2512,8 +2527,24 @@ function App() {
       </motion.header>
 
       <AnimatePresence mode="wait">
-        {!operationsOpen && (
-          <motion.section className="glass-panel action-deck" initial={{ x: -28, opacity: 0, filter: 'blur(8px)' }} animate={{ x: 0, opacity: 1, filter: 'blur(0px)' }} exit={{ x: -22, opacity: 0, filter: 'blur(8px)' }}>
+        {!operationsOpen && deckVisible && (
+          <motion.section
+            className="glass-panel action-deck"
+            initial={{ x: -28, opacity: 0, filter: 'blur(8px)' }}
+            animate={{ x: 0, opacity: 1, filter: 'blur(0px)' }}
+            exit={{ x: -22, opacity: 0, filter: 'blur(8px)' }}
+            onMouseEnter={() => { deckHoverRef.current = true; }}
+            onMouseLeave={() => { deckHoverRef.current = false; }}
+          >
+            <button
+              className="deck-close"
+              type="button"
+              aria-label="Hide panel"
+              title="Hide panel"
+              onClick={() => setDeckVisible(false)}
+            >
+              <X size={14} />
+            </button>
             {activeView === 'sos' ? (
               <SosDemo timeline={timeline} progress={routeProgress} runSosDemo={runSosDemo} endSosResponse={endSosResponse} activeSos={activeSosSummaries} sosPicking={sosPicking} onToggleSosPick={toggleSosPickMode} />
             ) : activeView === 'safewalk' ? (
