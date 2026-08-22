@@ -230,7 +230,7 @@ function apiToIncident(entry: ApiIncident): Incident {
   };
 }
 
-export function IncidentLogs() {
+export function IncidentLogs({ cityId = 'patiala' }: { cityId?: string }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [incidents, setIncidents] = useState<Incident[]>(DEMO_INCIDENTS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -239,20 +239,22 @@ export function IncidentLogs() {
   const [hoveredMedia, setHoveredMedia] = useState<string | null>(null);
   const [failedMedia, setFailedMedia] = useState<Set<string>>(new Set());
 
-  /** Load incident reports from Neon (GET /api/safety/incidents), falling back
-   *  to the embedded demo list when the API is unavailable (e.g. on Vercel).
-   *  Refetches whenever a simulated SOS call POSTs a new report. */
+  /** Load incident reports for the active city from Neon
+   *  (GET /api/safety/incidents?cityId=...), falling back to the embedded demo
+   *  list when the API is unavailable (e.g. on Vercel).  Refetches whenever a
+   *  simulated SOS call POSTs a new report or the active city changes. */
   const refreshIncidents = React.useCallback(() => {
-    fetch('/api/safety/incidents?limit=50')
+    fetch(`/api/safety/incidents?cityId=${encodeURIComponent(cityId)}&limit=50`)
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('incidents unavailable')))
       .then((data: { entries: ApiIncident[] }) => {
-        if (Array.isArray(data.entries) && data.entries.length) {
-          setIncidents(data.entries.map(apiToIncident));
-          setSelectedId((current) => (current && data.entries.some((e) => e.id === current)) ? current : data.entries[0].id);
+        if (Array.isArray(data.entries)) {
+          const mapped = data.entries.map(apiToIncident);
+          setIncidents(mapped);
+          setSelectedId((current) => (current && mapped.some((e) => e.id === current)) ? current : (mapped[0]?.id ?? null));
         }
       })
       .catch(() => { /* keep demo data when the API is down */ });
-  }, []);
+  }, [cityId]);
 
   useEffect(() => {
     refreshIncidents();

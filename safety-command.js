@@ -472,6 +472,64 @@ export function registerSafetyRoutes(app, getPool) {
     finally { client.release(); }
   });
 
+  // Multi-city management: list every city profile (with entity counts) and
+  // delete one.  stations/drones/patrol_points/danger_zones cascade off the
+  // city profile via FK; sos_log + incident_reports have no FK so they are
+  // cleared explicitly in the same transaction.
+  app.get('/api/safety/cities', async (req, res, next) => {
+    const client = await getPool().connect();
+    try {
+      await ensureSchema(client);
+      await seedIfEmpty(client);
+      const { rows } = await client.query(`
+        SELECT
+          c.id, c.name, c.country,
+          c.center_longitude, c.center_latitude, c.zoom,
+          (SELECT count(*) FROM safety_command.stations s WHERE s.city_id = c.id)::integer AS stations,
+          (SELECT count(*) FROM safety_command.drones d WHERE d.city_id = c.id)::integer AS drones,
+          (SELECT count(*) FROM safety_command.danger_zones z WHERE z.city_id = c.id)::integer AS danger_zones
+        FROM safety_command.city_profiles c
+        ORDER BY c.name, c.id
+      `);
+      res.json({
+        cities: rows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          country: row.country,
+          center: [Number(row.center_longitude), Number(row.center_latitude)],
+          zoom: Number(row.zoom),
+          stations: row.stations,
+          drones: row.drones,
+          dangerZones: row.danger_zones
+        }))
+      });
+    } catch (error) { next(error); }
+    finally { client.release(); }
+  });
+
+  app.delete('/api/safety/cities/:id', async (req, res, next) => {
+    const client = await getPool().connect();
+    try {
+      await ensureSchema(client);
+      const cityId = String(req.params.id || '').trim();
+      const found = await client.query('SELECT 1 FROM safety_command.city_profiles WHERE id = $1', [cityId]);
+      if (!found.rowCount) {
+        res.status(404).json({ error: 'City not found' });
+        return;
+      }
+      await client.query('BEGIN');
+      await client.query('DELETE FROM safety_command.sos_log WHERE city_id = $1', [cityId]);
+      await client.query('DELETE FROM safety_command.incident_reports WHERE city_id = $1', [cityId]);
+      await client.query('DELETE FROM safety_command.city_profiles WHERE id = $1', [cityId]);
+      await client.query('COMMIT');
+      res.json({ ok: true, id: cityId });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      next(error);
+    }
+    finally { client.release(); }
+  });
+
   app.get('/api/safety/health', async (_req, res, next) => {
     const client = await getPool().connect();
     try {

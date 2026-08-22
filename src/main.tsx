@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AnimatePresence, motion } from 'framer-motion';
 import maplibregl, { GeoJSONSource, LngLatBounds, Map as MapLibreMap } from 'maplibre-gl';
@@ -132,6 +132,19 @@ type TimelineEvent = {
 
 type NavView = 'dashboard' | 'sos' | 'safewalk' | 'about';
 type StudioTab = 'city' | 'drones' | 'stations' | 'danger' | 'planner';
+
+/** Summary of a saved city profile (GET /api/safety/cities) for the
+ *  multi-city picker in Command Studio. */
+type CitySummary = {
+  id: string;
+  name: string;
+  country: string;
+  center: Coordinate;
+  zoom: number;
+  stations: number;
+  drones: number;
+  dangerZones: number;
+};
 
 type SafetyConfig = {
   city: { id: string; name: string; country: string; center: Coordinate; zoom: number };
@@ -440,6 +453,13 @@ function App() {
   const [activeView, setActiveView] = useState<NavView>('dashboard');
   const [mapReady, setMapReady] = useState(false);
   const [safetyConfig, setSafetyConfig] = useState<SafetyConfig>(emptySafetyConfig);
+  // Active city id - persisted so a reload lands on the same command grid.
+  // The config + sos-log effects key off this, so switching cities reloads
+  // the whole grid, log, and incident panel.
+  const [activeCityId, setActiveCityId] = useState<string>(() => {
+    try { return window.localStorage.getItem('sos-dashboard:activeCity') || 'patiala'; } catch { return 'patiala'; }
+  });
+  const [cities, setCities] = useState<CitySummary[]>([]);
   const [studioOpen, setStudioOpen] = useState(false);
   const [studioTab, setStudioTab] = useState<StudioTab>('city');
   const [drones, setDrones] = useState<Drone[]>([]);
@@ -483,6 +503,8 @@ function App() {
   safetyConfigRef.current = safetyConfig;
   noFlyZonesRef.current = noFlyZones ?? [];
 
+  // Load the active city's command grid from Neon (or the local fallback grid
+  // when the API is unreachable).  Re-runs whenever the active city changes.
   useEffect(() => {
     let cancelled = false;
     let settled = false;
@@ -502,13 +524,13 @@ function App() {
       2000
     );
 
-    fetch('/api/safety/config')
+    fetch(`/api/safety/config?cityId=${encodeURIComponent(activeCityId)}`)
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('Safety config unavailable')))
       .then((config: SafetyConfig | null) => {
         window.clearTimeout(fallbackTimer);
         if (cancelled) return;
-        // server has no profile (or an empty one) for this city yet - keep the local grid
-        if (!config || !config.stations?.length) {
+        // server has no profile for this city yet - keep the local grid
+        if (!config) {
           fallback('Using local command grid (no saved profile yet)');
           return;
         }
@@ -516,6 +538,7 @@ function App() {
         setSafetyConfig(config);
         setDrones(config.drones);
         setToast(`${config.city.name} command grid loaded from Neon`);
+        mapRef.current?.easeTo({ center: config.city.center, zoom: config.city.zoom, duration: 900 });
       })
       .catch(() => {
         window.clearTimeout(fallbackTimer);
@@ -526,17 +549,59 @@ function App() {
       cancelled = true;
       window.clearTimeout(fallbackTimer);
     };
-  }, []);
+  }, [activeCityId]);
 
-  // Seed the SOS log sidebar from the persisted call history.
+  // Seed the SOS log sidebar from the persisted call history for the active
+  // city (cleared on switch so stale entries from another city never linger).
   useEffect(() => {
-    fetch('/api/safety/sos-log?limit=50')
+    let cancelled = false;
+    setSosLog([]);
+    fetch(`/api/safety/sos-log?cityId=${encodeURIComponent(activeCityId)}&limit=50`)
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('SOS log unavailable')))
       .then((data: { entries: SosLogEntry[] }) => {
-        if (Array.isArray(data.entries) && data.entries.length) setSosLog(data.entries);
+        if (!cancelled && Array.isArray(data.entries)) setSosLog(data.entries);
       })
-      .catch(() => { /* keep the in-memory log until a write succeeds */ });
+      .catch(() => { if (!cancelled) setSosLog([]); });
+    return () => { cancelled = true; };
+  }, [activeCityId]);
+
+  // --- multi-city management ---
+  const persistActiveCity = (cityId: string) => {
+    try { window.localStorage.setItem('sos-dashboard:activeCity', cityId); } catch { /* private mode */ }
+  };
+
+  const switchCity = (cityId: string) => {
+    persistActiveCity(cityId);
+    setActiveCityId(cityId);
+  };
+
+  const refreshCities = useCallback(async () => {
+    try {
+      const response = await fetch('/api/safety/cities');
+      if (!response.ok) throw new Error('cities unavailable');
+      const data = await response.json() as { cities: CitySummary[] };
+      const list = Array.isArray(data.cities) ? data.cities : [];
+      setCities(list);
+      return list;
+    } catch {
+      return [];
+    }
   }, []);
+
+  useEffect(() => { refreshCities(); }, [refreshCities]);
+
+  const deleteCity = async (cityId: string) => {
+    if (!window.confirm(`Delete ${cityId}? This removes its stations, drones, zones, and logs from Neon.`)) return;
+    try {
+      const response = await fetch(`/api/safety/cities/${encodeURIComponent(cityId)}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error('Could not delete city');
+      const remaining = await refreshCities();
+      if (cityId === activeCityId) switchCity(remaining.length ? remaining[0].id : 'patiala');
+      setToast('City deleted');
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Could not delete city');
+    }
+  };
 
   const activeDrones = drones.filter((drone) => !isPoolDrone(drone) && drone.status === 'Patrol').length;
   const criticalAlerts = alerts.filter((alert) => alert.priority === 'Critical' && alert.status !== 'Resolved').length;
@@ -2410,6 +2475,9 @@ function App() {
       const saved = await response.json() as SafetyConfig;
       setSafetyConfig(saved);
       setDrones(saved.drones);
+      persistActiveCity(saved.city.id);
+      setActiveCityId(saved.city.id);
+      refreshCities();
       setStudioOpen(false);
       setToast(`${saved.city.name} command configuration synced to Neon`);
       mapRef.current?.easeTo({ center: saved.city.center, zoom: saved.city.zoom, duration: 900 });
@@ -2523,7 +2591,7 @@ function App() {
                     return;
                   }
                   // Pull the complete persisted history before expanding.
-                  fetch('/api/safety/sos-log?limit=500')
+                  fetch(`/api/safety/sos-log?cityId=${encodeURIComponent(activeCityId)}&limit=500`)
                     .then((response) => response.ok ? response.json() : Promise.reject(new Error('SOS log unavailable')))
                     .then((data: { entries: SosLogEntry[] }) => {
                       if (Array.isArray(data.entries) && data.entries.length) setSosLog(data.entries);
@@ -2620,11 +2688,15 @@ function App() {
       <AnimatePresence>
         {studioOpen && (
           <CommandStudio
+            key={safetyConfig.city.id}
             config={safetyConfig}
             initialTab={studioTab}
             onTabChange={setStudioTab}
             onClose={() => setStudioOpen(false)}
             onSave={saveSafetyConfig}
+            onSwitchCity={switchCity}
+            onDeleteCity={deleteCity}
+            cities={cities}
             noFlyZones={noFlyZones ?? []}
           />
         )}
@@ -2663,7 +2735,7 @@ function App() {
         <div className="legend-heat"><span className="heat-swatch" />Risk heat</div>
       </motion.section>
 
-      <IncidentLogs />
+      <IncidentLogs cityId={activeCityId} />
 
       <AnimatePresence>
         <motion.div className="toast" key={toast} initial={{ y: 18, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 12, opacity: 0 }}>
@@ -3083,12 +3155,15 @@ function LocationField({ active, onSelect }: { active: boolean; onSelect: () => 
   return <div className="studio-location-field"><div><span>Location target</span><strong>{active ? 'Editing this item on the map below' : 'Choose this item to edit it on the map'}</strong></div><button type="button" aria-pressed={active} className={active ? 'secondary-action active-location' : 'secondary-action'} onClick={onSelect}><MapPin size={15} />{active ? 'Editing on map' : 'Edit on map'}</button></div>;
 }
 
-function CommandStudio({ config, initialTab, onTabChange, onClose, onSave, noFlyZones }: {
+function CommandStudio({ config, initialTab, onTabChange, onClose, onSave, onSwitchCity, onDeleteCity, cities, noFlyZones }: {
   config: SafetyConfig;
   initialTab: StudioTab;
   onTabChange: (tab: StudioTab) => void;
   onClose: () => void;
-  onSave: (config: SafetyConfig) => void;
+  onSave: (config: SafetyConfig) => Promise<void> | void;
+  onSwitchCity: (cityId: string) => void;
+  onDeleteCity: (cityId: string) => Promise<void>;
+  cities: CitySummary[];
   noFlyZones: NoFlyZoneInfo[];
 }) {
   const [draft, setDraft] = useState<SafetyConfig>(() => {
@@ -3098,6 +3173,68 @@ function CommandStudio({ config, initialTab, onTabChange, onClose, onSave, noFly
     return initial;
   });
   const [saving, setSaving] = useState(false);
+  const [addingCity, setAddingCity] = useState(false);
+  const [newCityName, setNewCityName] = useState('');
+  const [newCityCountry, setNewCityCountry] = useState('');
+  const [templateId, setTemplateId] = useState('');
+
+  /** Create a new city profile and switch to it.  A blank grid starts with no
+   *  stations/drones/zones; choosing a template clones the source city's grid
+   *  (re-id'd with the new city's slug so the global id space stays unique). */
+  const createCity = async () => {
+    const name = newCityName.trim();
+    if (!name) return;
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'city';
+    if (cities.some((city) => city.id === slug)) {
+      window.alert(`A city named "${name}" already exists`);
+      return;
+    }
+    let next: SafetyConfig;
+    if (templateId) {
+      const response = await fetch(`/api/safety/config?cityId=${encodeURIComponent(templateId)}`);
+      const source = await response.json() as SafetyConfig | null;
+      if (!source) {
+        window.alert('Could not load the template city');
+        return;
+      }
+      next = structuredClone(source);
+      const prefix = `${slug}-`;
+      const stationIds = new Map(next.stations.map((station) => [station.id, `${prefix}${station.id}`]));
+      const droneIds = new Map(next.drones.map((drone) => [drone.id, `${prefix}${drone.id}`]));
+      next.city = { id: slug, name, country: newCityCountry.trim() || source.city.country, center: source.city.center, zoom: source.city.zoom };
+      next.stations = next.stations.map((station) => ({
+        ...station,
+        id: stationIds.get(station.id) ?? station.id,
+        droneId: station.droneId ? droneIds.get(station.droneId) ?? station.droneId : null,
+        reserveDroneId: station.reserveDroneId ? droneIds.get(station.reserveDroneId) ?? station.reserveDroneId : null
+      }));
+      // The spare pool is system-managed - never clone it.
+      next.drones = next.drones.filter((drone) => drone.role !== 'Spare').map((drone) => ({
+        ...drone,
+        id: droneIds.get(drone.id) ?? drone.id,
+        stationId: drone.stationId ? stationIds.get(drone.stationId) ?? drone.stationId : null,
+        coverageForDroneId: drone.coverageForDroneId ? droneIds.get(drone.coverageForDroneId) ?? drone.coverageForDroneId : null
+      }));
+      next.patrolPoints = next.patrolPoints.map((point) => ({ ...point, id: `${prefix}${point.id}` }));
+      next.dangerZones = next.dangerZones.map((zone) => ({ ...zone, id: `${prefix}${zone.id}` }));
+    } else {
+      next = {
+        city: { id: slug, name, country: newCityCountry.trim() || 'India', center: draft.city.center, zoom: draft.city.zoom },
+        stations: [],
+        drones: [],
+        patrolPoints: [],
+        dangerZones: [],
+        planner: { gridResolutionM: null }
+      };
+    }
+    setSaving(true);
+    await onSave(next);
+    setSaving(false);
+    setAddingCity(false);
+    setNewCityName('');
+    setNewCityCountry('');
+    setTemplateId('');
+  };
   const tabs: Array<{ id: StudioTab; label: string; icon: React.ReactNode }> = [
     { id: 'city', label: 'City profile', icon: <MapPinned size={15} /> },
     { id: 'drones', label: 'Drones', icon: <Bot size={15} /> },
@@ -3232,7 +3369,7 @@ function CommandStudio({ config, initialTab, onTabChange, onClose, onSave, noFly
         </nav>
         <section className="studio-content">
           <LocationPicker label={selectedLocationLabel} coordinate={selectedLocation} onPlace={applyLocation} items={tabItems} activeKey={activeKey} onSelectItem={selectItem} noFlyZones={noFlyZones} patrolRings={patrolRings} />
-          {currentTab === 'city' && <div className="studio-section"><StudioHeading title="City profile" subtitle="Name and default view for this command grid." /><div className="studio-form-grid"><label>Name<input value={draft.city.name} onChange={(event) => setCity('name', event.target.value)} /></label><label>Country<input value={draft.city.country} onChange={(event) => setCity('country', event.target.value)} /></label><label>Default zoom<input type="number" step="0.1" min="1" max="20" value={draft.city.zoom} onChange={(event) => setCity('zoom', Number(event.target.value))} /></label></div></div>}
+          {currentTab === 'city' && <div className="studio-section"><StudioHeading title="Cities" subtitle="Switch the active city, add a new command grid, or remove one." />{cities.length === 0 ? <p className="studio-hint">No saved cities yet - add one below.</p> : <div className="studio-city-list">{cities.map((city) => <div className={`studio-city-card${city.id === config.city.id ? ' active' : ''}`} key={city.id}><div className="studio-city-info"><strong>{city.name}</strong><span className="studio-city-meta">{city.country} · {city.stations} stations · {city.drones} drones · {city.dangerZones} zones</span></div><div className="studio-city-actions">{city.id === config.city.id ? <span className="studio-city-active">Active</span> : <button className="secondary-action" type="button" onClick={() => onSwitchCity(city.id)}>Open</button>}<button className="icon-button" type="button" disabled={cities.length <= 1} onClick={() => onDeleteCity(city.id)} aria-label={`Delete ${city.name}`} title={cities.length <= 1 ? 'Cannot delete the last city' : 'Delete city'}><Trash2 size={15} /></button></div></div>)}</div>}{addingCity ? <div className="studio-add-city"><div className="studio-form-grid"><label>Name<input value={newCityName} onChange={(event) => setNewCityName(event.target.value)} placeholder="e.g. Mumbai" /></label><label>Country<input value={newCityCountry} onChange={(event) => setNewCityCountry(event.target.value)} placeholder="e.g. India" /></label><label>Template<select value={templateId} onChange={(event) => setTemplateId(event.target.value)}><option value="">Blank grid - no stations or drones</option>{cities.map((city) => <option key={city.id} value={city.id}>Copy from {city.name}</option>)}</select></label></div><p className="studio-hint">A blank grid starts empty; a template copies the source city's stations, drones, patrol points, and danger zones (re-id'd so it can't clash with the source).</p><div className="studio-add-city-actions"><button className="secondary-action" type="button" onClick={() => { setAddingCity(false); setNewCityName(''); setNewCityCountry(''); setTemplateId(''); }}>Cancel</button><button className="primary-action" type="button" disabled={saving || !newCityName.trim()} onClick={createCity}>{saving ? 'Creating…' : 'Create city'}</button></div></div> : <button className="secondary-action" type="button" onClick={() => setAddingCity(true)}><Plus size={15} /> Add city</button>}<div style={{ marginTop: 28 }}><StudioHeading title="City profile" subtitle="Name, country, and default map view for the active command grid." /><div className="studio-form-grid"><label>Name<input value={draft.city.name} onChange={(event) => setCity('name', event.target.value)} /></label><label>Country<input value={draft.city.country} onChange={(event) => setCity('country', event.target.value)} /></label><label>Default zoom<input type="number" step="0.1" min="1" max="20" value={draft.city.zoom} onChange={(event) => setCity('zoom', Number(event.target.value))} /></label></div></div></div>}
           {currentTab === 'drones' && <StudioCollection title="Drones" count={draft.drones.length} onAdd={() => addItem('drones')}><div className="studio-list">{draft.drones.map((drone, index) => <div className="studio-card" key={drone.id} data-studio-card={drone.id}><div className="studio-card-title"><strong>{drone.id}</strong><button type="button" className="icon-button" onClick={() => removeItem('drones', index)} aria-label={`Remove ${drone.id}`}><Trash2 size={15} /></button></div><div className="studio-form-grid"><label>Label<input value={drone.label} onChange={(event) => updateItem('drones', index, 'label', event.target.value)} /></label><label>Route name<input value={drone.routeName} onChange={(event) => updateItem('drones', index, 'routeName', event.target.value)} /></label><label>Station<select value={drone.stationId || ''} onChange={(event) => updateItem('drones', index, 'stationId', event.target.value)}><option value="">Unassigned</option>{draft.stations.map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label><label>Role<select value={drone.role || 'Patrol'} onChange={(event) => updateItem('drones', index, 'role', event.target.value)}><option value="Patrol">Patrol</option><option value="Reserve">Reserve</option></select></label><label>Battery %<input type="number" min="0" max="100" value={drone.battery} onChange={(event) => updateItem('drones', index, 'battery', Number(event.target.value))} /></label></div><LocationField active={locationTarget.kind === 'drones' && locationTarget.index === index} onSelect={() => selectLocation('drones', index)} /></div>)}</div></StudioCollection>}
           {currentTab === 'stations' && <StudioCollection title="Response stations" count={draft.stations.length} onAdd={() => addItem('stations')}><div className="studio-list">{draft.stations.map((station, index) => <div className="studio-card" key={station.id} data-studio-card={station.id}><div className="studio-card-title"><strong>{station.id}</strong><button type="button" className="icon-button" onClick={() => removeItem('stations', index)} aria-label={`Remove ${station.id}`}><Trash2 size={15} /></button></div><div className="studio-form-grid"><label>Name<input value={station.name} onChange={(event) => updateItem('stations', index, 'name', event.target.value)} /></label><label>Assigned drone<select value={station.droneId || ''} onChange={(event) => updateItem('stations', index, 'droneId', event.target.value)}><option value="">Unassigned</option>{draft.drones.filter((drone) => drone.role !== 'Reserve').map((drone) => <option key={drone.id} value={drone.id}>{drone.id}</option>)}</select></label><label>Reserve drone<select value={station.reserveDroneId || ''} onChange={(event) => updateItem('stations', index, 'reserveDroneId', event.target.value)}><option value="">Unassigned</option>{draft.drones.filter((drone) => drone.role === 'Reserve').map((drone) => <option key={drone.id} value={drone.id}>{drone.id}</option>)}</select></label></div><LocationField active={locationTarget.kind === 'stations' && locationTarget.index === index} onSelect={() => selectLocation('stations', index)} /></div>)}</div></StudioCollection>}
           {currentTab === 'danger' && <StudioCollection title="Danger zones" count={draft.dangerZones.length} onAdd={() => addItem('dangerZones')}><div className="studio-list">{draft.dangerZones.map((zone, index) => <div className="studio-card" key={zone.id} data-studio-card={zone.id}><div className="studio-card-title"><strong>{zone.id}</strong><button type="button" className="icon-button" onClick={() => removeItem('dangerZones', index)} aria-label={`Remove ${zone.id}`}><Trash2 size={15} /></button></div><div className="studio-form-grid"><label>Name<input value={zone.name} onChange={(event) => updateItem('dangerZones', index, 'name', event.target.value)} /></label><label>Category<input value={zone.category} onChange={(event) => updateItem('dangerZones', index, 'category', event.target.value)} /></label><label>Severity<input type="number" min="0" max="1" step="0.01" value={zone.severity} onChange={(event) => updateItem('dangerZones', index, 'severity', Number(event.target.value))} /></label><label>Radius (m)<input type="number" min="1" value={zone.radiusM} onChange={(event) => updateItem('dangerZones', index, 'radiusM', Number(event.target.value))} /></label></div><LocationField active={locationTarget.kind === 'dangerZones' && locationTarget.index === index} onSelect={() => selectLocation('dangerZones', index)} /></div>)}</div></StudioCollection>}
