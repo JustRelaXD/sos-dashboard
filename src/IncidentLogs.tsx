@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Search, Filter, ArrowRight, MapPin, Shield } from 'lucide-react';
+import { Search, Filter, ArrowRight, MapPin, Shield, Camera, Video, X } from 'lucide-react';
 
 /** Core incident fields per spec */
 type Incident = {
@@ -19,6 +19,7 @@ type Incident = {
   };
   reporterId: string;
   responderNotes: string;
+  media?: 'screenshot' | 'recording';
 };
 
 const incidents: Incident[] = [
@@ -34,6 +35,7 @@ const incidents: Incident[] = [
     location: { street: 'North Beach / Pier 39', landmark: 'Near Fisherman\'s Wharf', lat: 37.8087, lng: -122.4098 },
     reporterId: 'USR-A4F2K',
     responderNotes: 'Unit S-14 dispatched. Caller guided to well-lit cafe pending arrival.',
+    media: 'screenshot',
   },
   {
     id: 'INC-2407',
@@ -60,6 +62,7 @@ const incidents: Incident[] = [
     location: { street: 'Civic Center / Grove St', landmark: 'Civic Center Plaza', lat: 37.7796, lng: -122.4177 },
     reporterId: 'USR-C2E9F',
     responderNotes: 'EMS + patrol dispatched. Scene secured, victim receiving aid.',
+    media: 'recording',
   },
   {
     id: 'INC-2405',
@@ -73,6 +76,7 @@ const incidents: Incident[] = [
     location: { street: 'Embarcadero / Ferry Building', landmark: 'Ferry Plaza', lat: 37.7955, lng: -122.3937 },
     reporterId: 'USR-D7A1B',
     responderNotes: 'City maintenance notified, streetlight repaired within 2 hrs.',
+    media: 'screenshot',
   },
   {
     id: 'INC-2404',
@@ -99,11 +103,9 @@ const incidents: Incident[] = [
     location: { street: 'Dogpatch / 3rd Street', landmark: 'Minnesota St', lat: 37.7582, lng: -122.3878 },
     reporterId: 'USR-F9D2A',
     responderNotes: 'Pattern report logged, flagged for patrol attention in corridor.',
+    media: 'recording',
   },
 ];
-
-const severityClass = (severity: string) => severity.toLowerCase();
-const statusClass = (status: string) => status.toLowerCase();
 
 const CATEGORIES: Incident['category'][] = ['Harassment', 'Stalking', 'Poor Lighting', 'Assault', 'Unsafe Transport', 'Other'];
 const SEVERITIES: Incident['severity'][] = ['Critical', 'High', 'Medium', 'Low'];
@@ -118,7 +120,7 @@ type GeofenceZone = {
   riskLevel: 'High Risk' | 'Moderate' | 'Watch';
 };
 
-/** Auto-derive geofenced zones: group incidents by proximity (within 500m) */
+/** Auto-derive geofence zones: group incidents by proximity (within 500m) */
 function deriveGeofenceZones(incidents: Incident[]): GeofenceZone[] {
   const RADIUS_M = 500;
   const zones: GeofenceZone[] = [];
@@ -160,11 +162,15 @@ function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number)
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+const severityClass = (severity: string) => severity.toLowerCase();
+const statusClass = (status: string) => status.toLowerCase();
+
 export function IncidentLogs() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(incidents[0].id);
   const [activeCategories, setActiveCategories] = useState<Set<string>>(new Set());
   const [activeSeverities, setActiveSeverities] = useState<Set<string>>(new Set());
+  const [hoveredMedia, setHoveredMedia] = useState<string | null>(null);
 
   const toggleCategory = (cat: string) => {
     setActiveCategories((prev) => {
@@ -217,7 +223,6 @@ export function IncidentLogs() {
           </div>
           <p className="il-subtitle">Live safety incident reports and response activity.</p>
         </div>
-
       </div>
 
       <div className="il-summary-strip">
@@ -298,36 +303,76 @@ export function IncidentLogs() {
       <div className="il-logs-list">
         {filtered.length ? (
           filtered.map((incident) => (
-            <button
-              key={incident.id}
-              className={`il-log-card${selectedId === incident.id ? ' selected' : ''}`}
-              type="button"
-              onClick={() => setSelectedId(incident.id)}
-            >
-              <span className={`il-priority-bar ${severityClass(incident.severity)}`} />
-              <span className="il-log-main">
-                <span className="il-log-topline">
-                  <span className="il-log-title">{incident.title}</span>
-                  <span className="il-log-time">{incident.date} · {incident.time}</span>
-                </span>
-                <span className="il-log-meta">
-                  <span><MapPin size={10} /> {incident.location.street}</span>
-                  <span>{incident.category}</span>
-                </span>
-                <span className="il-log-coords">
-                  <small>Reporter: {incident.reporterId} · GPS: {incident.location.lat.toFixed(4)}, {incident.location.lng.toFixed(4)}</small>
-                </span>
-                {incident.responderNotes && (
-                  <span className="il-responder-notes">
-                    <Shield size={10} /> {incident.responderNotes}
+            <div key={incident.id} className="il-log-card-wrapper">
+              <button
+                className={`il-log-card${selectedId === incident.id ? ' selected' : ''}`}
+                type="button"
+                onClick={() => setSelectedId(incident.id)}
+              >
+                <span className={`il-priority-bar ${severityClass(incident.severity)}`} />
+                <span className="il-log-main">
+                  <span className="il-log-topline">
+                    <span className="il-log-title">{incident.title}</span>
+                    <span className="il-log-time">{incident.date} · {incident.time}</span>
                   </span>
-                )}
-              </span>
-              <span className={`il-status-pill ${statusClass(incident.status)}`}>
-                <span className={`il-severity-dot ${severityClass(incident.severity)}`} />
-                {incident.status}
-              </span>
-            </button>
+                  <span className="il-log-meta">
+                    <span><MapPin size={10} /> {incident.location.street}</span>
+                    <span>{incident.category}</span>
+                  </span>
+                  <span className="il-log-coords">
+                    <small>Reporter: {incident.reporterId} · GPS: {incident.location.lat.toFixed(4)}, {incident.location.lng.toFixed(4)}</small>
+                  </span>
+                  {incident.responderNotes && (
+                    <span className="il-responder-notes">
+                      <Shield size={10} /> {incident.responderNotes}
+                    </span>
+                  )}
+                </span>
+                <span className={`il-status-pill ${statusClass(incident.status)}`}>
+                  <span className={`il-severity-dot ${severityClass(incident.severity)}`} />
+                  {incident.status}
+                </span>
+              </button>
+
+              {incident.media && (
+                <button
+                  className="il-media-btn"
+                  type="button"
+                  title={incident.media === 'screenshot' ? 'View screenshot' : 'View recording'}
+                  onMouseEnter={() => setHoveredMedia(incident.id)}
+                  onMouseLeave={() => setHoveredMedia(null)}
+                >
+                  {incident.media === 'screenshot' ? <Camera size={13} /> : <Video size={13} />}
+                </button>
+              )}
+
+              {incident.media && hoveredMedia === incident.id && (
+                <div className="il-media-popover">
+                  <div className="il-media-preview">
+                    <span className="il-media-badge">
+                      {incident.media === 'screenshot' ? 'SNAPSHOT' : 'REC 00:38 / 02:14'}
+                    </span>
+                    <div className="il-media-placeholder">
+                      {incident.media === 'screenshot' ? (
+                        <div className="il-placeholder-screenshot">
+                          <span className="il-placeholder-label">CAM 04 / {incident.location.landmark.toUpperCase()}</span>
+                          <span className="il-placeholder-id">FRAME {Math.floor(Math.random() * 90000)}</span>
+                        </div>
+                      ) : (
+                        <div className="il-placeholder-recording">
+                          <span className="il-placeholder-play">▶</span>
+                          <span className="il-placeholder-label">REC-2408-A · AI REVIEW</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="il-media-footer">
+                      <span>{incident.location.street}</span>
+                      <span>{incident.time}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           ))
         ) : (
           <div className="il-no-results">No incidents match your current filters.</div>
