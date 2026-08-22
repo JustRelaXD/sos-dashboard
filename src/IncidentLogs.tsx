@@ -1,5 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { Search, Filter, ArrowRight, MapPin, Shield, Camera, Video, X } from 'lucide-react';
+import { Search, ArrowRight, MapPin, Shield, Camera, Video } from 'lucide-react';
+
+/** Media stays local during demos and can later point at a remote storage adapter. */
+type MediaAsset = {
+  type: 'screenshot' | 'recording';
+  src: string;
+  poster?: string;
+};
 
 /** Core incident fields per spec */
 type Incident = {
@@ -19,7 +26,7 @@ type Incident = {
   };
   reporterId: string;
   responderNotes: string;
-  media?: 'screenshot' | 'recording';
+  media?: MediaAsset;
 };
 
 const incidents: Incident[] = [
@@ -35,7 +42,7 @@ const incidents: Incident[] = [
     location: { street: 'North Beach / Pier 39', landmark: 'Near Fisherman\'s Wharf', lat: 37.8087, lng: -122.4098 },
     reporterId: 'USR-A4F2K',
     responderNotes: 'Unit S-14 dispatched. Caller guided to well-lit cafe pending arrival.',
-    media: 'screenshot',
+    media: { type: 'screenshot', src: '/media/incidents/INC-2408/snapshot-001.jpg' },
   },
   {
     id: 'INC-2407',
@@ -62,7 +69,7 @@ const incidents: Incident[] = [
     location: { street: 'Civic Center / Grove St', landmark: 'Civic Center Plaza', lat: 37.7796, lng: -122.4177 },
     reporterId: 'USR-C2E9F',
     responderNotes: 'EMS + patrol dispatched. Scene secured, victim receiving aid.',
-    media: 'recording',
+    media: { type: 'recording', src: '/media/incidents/INC-2406/recording-001.mp4', poster: '/media/incidents/INC-2406/poster.jpg' },
   },
   {
     id: 'INC-2405',
@@ -76,7 +83,7 @@ const incidents: Incident[] = [
     location: { street: 'Embarcadero / Ferry Building', landmark: 'Ferry Plaza', lat: 37.7955, lng: -122.3937 },
     reporterId: 'USR-D7A1B',
     responderNotes: 'City maintenance notified, streetlight repaired within 2 hrs.',
-    media: 'screenshot',
+    media: { type: 'screenshot', src: '/media/incidents/INC-2405/snapshot-001.jpg' },
   },
   {
     id: 'INC-2404',
@@ -103,7 +110,7 @@ const incidents: Incident[] = [
     location: { street: 'Dogpatch / 3rd Street', landmark: 'Minnesota St', lat: 37.7582, lng: -122.3878 },
     reporterId: 'USR-F9D2A',
     responderNotes: 'Pattern report logged, flagged for patrol attention in corridor.',
-    media: 'recording',
+    media: { type: 'recording', src: '/media/incidents/INC-2403/recording-001.mp4', poster: '/media/incidents/INC-2403/poster.jpg' },
   },
 ];
 
@@ -171,6 +178,11 @@ export function IncidentLogs() {
   const [activeCategories, setActiveCategories] = useState<Set<string>>(new Set());
   const [activeSeverities, setActiveSeverities] = useState<Set<string>>(new Set());
   const [hoveredMedia, setHoveredMedia] = useState<string | null>(null);
+  const [failedMedia, setFailedMedia] = useState<Set<string>>(new Set());
+
+  const markMediaFailed = (incidentId: string) => {
+    setFailedMedia((current) => new Set(current).add(incidentId));
+  };
 
   const toggleCategory = (cat: string) => {
     setActiveCategories((prev) => {
@@ -303,7 +315,12 @@ export function IncidentLogs() {
       <div className="il-logs-list">
         {filtered.length ? (
           filtered.map((incident) => (
-            <div key={incident.id} className="il-log-card-wrapper">
+            <div
+              key={incident.id}
+              className="il-log-card-wrapper"
+              onMouseEnter={() => incident.media && setHoveredMedia(incident.id)}
+              onMouseLeave={() => setHoveredMedia(null)}
+            >
               <button
                 className={`il-log-card${selectedId === incident.id ? ' selected' : ''}`}
                 type="button"
@@ -338,11 +355,10 @@ export function IncidentLogs() {
                 <button
                   className="il-media-btn"
                   type="button"
-                  title={incident.media === 'screenshot' ? 'View screenshot' : 'View recording'}
-                  onMouseEnter={() => setHoveredMedia(incident.id)}
-                  onMouseLeave={() => setHoveredMedia(null)}
+                  title={incident.media.type === 'screenshot' ? 'View local screenshot' : 'View local recording'}
+                  aria-label={incident.media.type === 'screenshot' ? 'View local screenshot' : 'View local recording'}
                 >
-                  {incident.media === 'screenshot' ? <Camera size={13} /> : <Video size={13} />}
+                  {incident.media.type === 'screenshot' ? <Camera size={13} /> : <Video size={13} />}
                 </button>
               )}
 
@@ -350,19 +366,43 @@ export function IncidentLogs() {
                 <div className="il-media-popover">
                   <div className="il-media-preview">
                     <span className="il-media-badge">
-                      {incident.media === 'screenshot' ? 'SNAPSHOT' : 'REC 00:38 / 02:14'}
+                      {incident.media.type === 'screenshot' ? 'LOCAL SNAPSHOT' : 'LOCAL REC 00:38 / 02:14'}
                     </span>
                     <div className="il-media-placeholder">
-                      {incident.media === 'screenshot' ? (
-                        <div className="il-placeholder-screenshot">
-                          <span className="il-placeholder-label">CAM 04 / {incident.location.landmark.toUpperCase()}</span>
-                          <span className="il-placeholder-id">FRAME {Math.floor(Math.random() * 90000)}</span>
-                        </div>
-                      ) : (
-                        <div className="il-placeholder-recording">
-                          <span className="il-placeholder-play">▶</span>
-                          <span className="il-placeholder-label">REC-2408-A · AI REVIEW</span>
-                        </div>
+                      {!failedMedia.has(incident.id) && incident.media.type === 'screenshot' && (
+                        <img
+                          className="il-local-media"
+                          src={incident.media.src}
+                          alt={`Incident ${incident.id} local screenshot`}
+                          loading="lazy"
+                          onError={() => markMediaFailed(incident.id)}
+                        />
+                      )}
+                      {!failedMedia.has(incident.id) && incident.media.type === 'recording' && (
+                        <video
+                          className="il-local-media"
+                          src={incident.media.src}
+                          poster={incident.media.poster}
+                          muted
+                          autoPlay
+                          loop
+                          playsInline
+                          preload="metadata"
+                          onError={() => markMediaFailed(incident.id)}
+                        />
+                      )}
+                      {(!incident.media || failedMedia.has(incident.id)) && (
+                        incident.media?.type === 'screenshot' ? (
+                          <div className="il-placeholder-screenshot">
+                            <span className="il-placeholder-label">CAM 04 / {incident.location.landmark.toUpperCase()}</span>
+                            <span className="il-placeholder-id">LOCAL FILE UNAVAILABLE</span>
+                          </div>
+                        ) : (
+                          <div className="il-placeholder-recording">
+                            <span className="il-placeholder-play">▶</span>
+                            <span className="il-placeholder-label">LOCAL FILE UNAVAILABLE</span>
+                          </div>
+                        )
                       )}
                     </div>
                     <div className="il-media-footer">
