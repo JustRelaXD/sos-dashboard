@@ -418,7 +418,7 @@ export function IncidentLogs() {
                     <span>{incident.category}</span>
                   </span>
                   <span className="il-log-coords">
-                    <small>Reporter: {incident.reporterId} · GPS: {incident.location.lat.toFixed(4)}, {incident.location.lng.toFixed(4)}</small>
+                    <small>GPS: {incident.location.lat.toFixed(4)}, {incident.location.lng.toFixed(4)}</small>
                   </span>
                   {incident.responderNotes && (
                     <span className="il-responder-notes">
@@ -503,7 +503,6 @@ export function IncidentLogs() {
                     <div className="il-media-detail-row"><span>Severity</span><b className={`severity-text ${severityClass(incident.severity)}`}>{incident.severity}</b></div>
                     <div className="il-media-detail-row"><span>Category</span><b>{incident.category}</b></div>
                     <div className="il-media-detail-row"><span>Location</span><b>{incident.location.landmark}</b></div>
-                    <div className="il-media-detail-row"><span>Reporter</span><b>{incident.reporterId}</b></div>
                     <div className="il-media-detail-row"><span>Reported</span><b>{incident.date} · {incident.time}</b></div>
                     <p className="il-media-notes"><Shield size={11} /> {incident.responderNotes}</p>
                   </div>
