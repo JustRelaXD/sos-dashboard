@@ -2497,7 +2497,7 @@ function App() {
 
       <motion.header className="glass-panel top-dock" initial={{ y: -26, opacity: 0 }} animate={{ y: 0, opacity: 1 }}>
         <div className="top-title">
-          <strong>Women Safety Drone Response</strong>
+          <strong>Dashboard</strong>
         </div>
         <div className="top-actions">
           <button
