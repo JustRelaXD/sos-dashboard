@@ -419,6 +419,7 @@
 
 .il-log-meta {
   display: flex;
+  flex-wrap: wrap;
   gap: 11px;
   margin-top: 7px;
   overflow: hidden;
@@ -499,18 +500,11 @@
   background: #64748b;
 }
 
-/* GPS coords + reporter ID */
-.il-log-coords {
-  margin-top: 5px;
-  overflow: hidden;
-}
-
-.il-log-coords small {
+/* GPS coords - inline with the horizontal meta row */
+.il-log-coords-inline {
   color: #94a3b8;
-  font-size: 9px;
+  font-size: 10px;
   font-family: ui-monospace, monospace;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 /* Responder notes */

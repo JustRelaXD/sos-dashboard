@@ -416,9 +416,7 @@ export function IncidentLogs() {
                   <span className="il-log-meta">
                     <span><MapPin size={10} /> {incident.location.street}</span>
                     <span>{incident.category}</span>
-                  </span>
-                  <span className="il-log-coords">
-                    <small>GPS: {incident.location.lat.toFixed(4)}, {incident.location.lng.toFixed(4)}</small>
+                    <span className="il-log-coords-inline">GPS: {incident.location.lat.toFixed(4)}, {incident.location.lng.toFixed(4)}</span>
                   </span>
                   {incident.responderNotes && (
                     <span className="il-responder-notes">
