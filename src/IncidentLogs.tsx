@@ -105,16 +105,47 @@ const incidents: Incident[] = [
 const severityClass = (severity: string) => severity.toLowerCase();
 const statusClass = (status: string) => status.toLowerCase();
 
+const CATEGORIES: Incident['category'][] = ['Harassment', 'Stalking', 'Poor Lighting', 'Assault', 'Unsafe Transport', 'Other'];
+const SEVERITIES: Incident['severity'][] = ['Critical', 'High', 'Medium', 'Low'];
+
 export function IncidentLogs() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(incidents[0].id);
+  const [activeCategories, setActiveCategories] = useState<Set<string>>(new Set());
+  const [activeSeverities, setActiveSeverities] = useState<Set<string>>(new Set());
+
+  const toggleCategory = (cat: string) => {
+    setActiveCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat); else next.add(cat);
+      return next;
+    });
+  };
+
+  const toggleSeverity = (sev: string) => {
+    setActiveSeverities((prev) => {
+      const next = new Set(prev);
+      if (next.has(sev)) next.delete(sev); else next.add(sev);
+      return next;
+    });
+  };
+
+  const clearFilters = () => {
+    setActiveCategories(new Set());
+    setActiveSeverities(new Set());
+    setSearchTerm('');
+  };
+
+  const hasFilters = activeCategories.size > 0 || activeSeverities.size > 0 || searchTerm.length > 0;
 
   const filtered = useMemo(() => {
     return incidents.filter((incident) => {
+      const catMatch = activeCategories.size === 0 || activeCategories.has(incident.category);
+      const sevMatch = activeSeverities.size === 0 || activeSeverities.has(incident.severity);
       const haystack = `${incident.id} ${incident.title} ${incident.category} ${incident.location.street} ${incident.reporterId}`.toLowerCase();
-      return haystack.includes(searchTerm.toLowerCase());
+      return catMatch && sevMatch && haystack.includes(searchTerm.toLowerCase());
     });
-  }, [searchTerm]);
+  }, [searchTerm, activeCategories, activeSeverities]);
 
   const criticalCount = incidents.filter((i) => i.severity === 'Critical' && i.status !== 'Resolved').length;
   const openCount = incidents.filter((i) => i.status !== 'Resolved').length;
@@ -169,6 +200,45 @@ export function IncidentLogs() {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
+        </div>
+        {hasFilters && (
+          <button className="il-clear-filters" type="button" onClick={clearFilters}>
+            Clear ({activeCategories.size + activeSeverities.size})
+          </button>
+        )}
+      </div>
+
+      <div className="il-filter-toggles">
+        <div className="il-filter-group">
+          <span className="il-filter-group-label">Severity</span>
+          <div className="il-filter-chips">
+            {SEVERITIES.map((sev) => (
+              <button
+                key={sev}
+                className={`il-filter-chip severity-${sev.toLowerCase()}${activeSeverities.has(sev) ? ' active' : ''}`}
+                type="button"
+                onClick={() => toggleSeverity(sev)}
+              >
+                <span className={`il-severity-dot ${severityClass(sev)}`} />
+                {sev}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="il-filter-group">
+          <span className="il-filter-group-label">Incident type</span>
+          <div className="il-filter-chips">
+            {CATEGORIES.map((cat) => (
+              <button
+                key={cat}
+                className={`il-filter-chip${activeCategories.has(cat) ? ' active' : ''}`}
+                type="button"
+                onClick={() => toggleCategory(cat)}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
